@@ -4,8 +4,8 @@ import numpy as np
 class RandPatchDataset(Dataset):
     def __init__(
             self,
-            image, #np array memmapped
-            labels, #np
+            image, #np array memmapped #shape (C, H, W)
+            labels, #np (C, H, W)
             patch_size=256,
             samples_per_epoch=10000,
     ):
@@ -23,13 +23,8 @@ class RandPatchDataset(Dataset):
         y = np.random.randint(0, H - p + 1)
         x = np.random.randint(0, W - p + 1)
 
-        image_patch = self.image[y:y+p, x:x+p]
+        image_patch = self.image[:, y:y+p, x:x+p]
         label_patch = self.labels[y:y+p, x:x+p]
-
-        if image_patch.ndim == 2:#what is this?
-            image_patch = image_patch[None]
-        else:
-            image_patch = np.moveaxis(image_patch, -1, 0) #turn last dimension into first - will break something
 
         image_patch = torch.from_numpy(
             np.ascontiguousarray(image_patch)
@@ -38,7 +33,6 @@ class RandPatchDataset(Dataset):
         label_patch = torch.from_numpy(
             np.ascontiguousarray(label_patch)
         ).long()
-
 
         return image_patch, label_patch
 
