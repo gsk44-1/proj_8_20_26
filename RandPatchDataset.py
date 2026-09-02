@@ -27,7 +27,7 @@ class RandPatchDataset(Dataset):
         return self.samples_per_epoch
 
     def __getitem__(self, idx):
-        H, W = self.labels.shape[1:]
+        _, H, W = self.labels.shape
         p = self.patch_size
         b = self.block_size
     
