@@ -31,7 +31,6 @@ class RandPatchDataset(Dataset):
         p = self.patch_size
         b = self.block_size
     
-
         while True:
             block_id = np.random.randint(len(self.blocks))
             b_y, b_x = self.blocks[block_id]
@@ -40,6 +39,7 @@ class RandPatchDataset(Dataset):
             x = np.random.randint(b_x, b_x + b - p + 1)
 
             label_patch = self.labels[
+                0,
                 y:y+p, 
                 x:x+p
                 ]
@@ -55,7 +55,9 @@ class RandPatchDataset(Dataset):
 
         label_patch = torch.from_numpy(
             np.ascontiguousarray(label_patch)
-        ).long()
+        ).float()
+
+        label_patch = label_patch.unsqueeze(0)
 
         return image_patch, label_patch
 
