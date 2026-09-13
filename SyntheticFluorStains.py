@@ -498,23 +498,44 @@ class SyntheticFluorStains(Dataset):
         fg = (surf > -0.2)*(surf < 0.6)
 
         gy, gx = np.gradient(surf)
+        
+        ''' 
         grad_mag = np.sqrt(gx**2 + gy**2)
         grad_mag = (
             (grad_mag - grad_mag.min()) /
             (grad_mag.max() - grad_mag.min())
         )
         grad_mag = np.repeat(grad_mag[None, :, :], z_slices, axis=0)
-
+        '''
+        
         theta = np.arctan2(gy, gx)
+
+        delta = 0.1
+        noise = rng.uniform(-delta, delta, size=theta.shape)
+        theta = (theta + noise) % (2 * np.pi)
+        
         theta = np.repeat(theta[None, :, :], z_slices, axis=0)
 
-        scale = np.ones((z_slices, N, N))
+        
 
-        density2 = np.sqrt((dist_t(fg) + 1))
+        scale = np.ones((z_slices, N, N))
+        dist_fg = dist_t(fg)
+        density2 = np.sqrt((dist_fg + 1))
 
         #make 3d
         fg = np.repeat(fg[None, :, :], z_slices, axis=0)
         density2 = np.repeat(density2[None, :, :], z_slices, axis=0)
+
+
+        local_fgmax = maximum_filter(dist_fg, size=round(0.7*N/coarse.shape[0]))
+
+        max_fg = local_fgmax.max()
+
+        min_ratio = 1
+        max_ratio = 4
+
+        ratio = local_fgmax * (min_ratio - max_ratio)/max_fg
+        ratio += max_ratio
 
 
         seeds0 = self._sample_fg_pts_density(
@@ -524,11 +545,12 @@ class SyntheticFluorStains(Dataset):
             rng=rng
         )
 
+
         seeds0_scaled = seeds0.astype(float).copy()
         seeds0_scaled[:, 0] *= z_ratio
 
  
-        ratio = 2 + 2*(grad_mag)
+  
 
         seeds, labels, dist = self._anisotropic_lloyd_relaxation(
             np.full((self.z_slices, self.N, self.N), 1),
