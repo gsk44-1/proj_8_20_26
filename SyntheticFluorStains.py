@@ -662,8 +662,8 @@ class SyntheticFluorStains(Dataset):
         na1 = rng.uniform(0.6, 0.95)
         na2 = rng.uniform(0.6, 0.95)
 
-        pz1 = rng.uniform(-0.5, 0.5)
-        pz2 = rng.uniform(-0.5, 0.5)
+        pz1 = rng.uniform(0, 0.5)
+        pz2 = rng.uniform(0, 0.5)
 
         psf = psfm.vectorial_psf_centered(nz=15, dz=0.2, nx=31, dxy=0.1125,
                                         pz=pz1, wvl=0.461,
