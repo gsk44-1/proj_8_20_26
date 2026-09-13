@@ -112,7 +112,7 @@ class ConvBlock(nn.Module):
         out=self.conv1(x)
         out=self.BN1(out)
         
-        out=x+0.5*out+0.5*self.convDiff(x)+0.5*Ff
+        out=x+0.5*out+0.5*self.convDiff(x)+0.5*Ff #time step is 0.5?
 
         out=self.sig(out)
         out=cubic_iter(out)
