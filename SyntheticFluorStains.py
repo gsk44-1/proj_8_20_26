@@ -571,7 +571,7 @@ class SyntheticFluorStains(Dataset):
 
         labels_bin = labels.copy()
         labels_bin[boundary] = 0
-        labels_bin = labels != 0
+        labels_bin = labels_bin != 0
 
         dist_labels_bin = dist_t(labels_bin)
         labels_bin = dist_labels_bin > 3
