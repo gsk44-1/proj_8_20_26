@@ -536,7 +536,7 @@ class SyntheticFluorStains(Dataset):
 
         ratio = local_fgmax * (min_ratio - max_ratio)/max_fg
         ratio += max_ratio
-
+        ratio = np.repeat(ratio[None, :, :], z_slices, axis=0)
 
         seeds0 = self._sample_fg_pts_density(
             fg,
