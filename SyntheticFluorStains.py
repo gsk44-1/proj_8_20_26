@@ -562,19 +562,25 @@ class SyntheticFluorStains(Dataset):
 
         boundary = np.zeros_like(labels, dtype=bool)
 
+
         for z in range(labels.shape[0]):
             boundary[z] = find_boundaries(
                 labels[z],
                 mode="inner"
             )
 
-        bands = np.array([[5, 100], [5, 50], [0.1, 5]])
+        labels[boundary] = 0
+        labels = labels != 0
+
+        dist_labels = dist_t(labels)
+        labels_bin = dist_labels > 3
+
 
         #dist will be used for rings
         dist[np.isinf(dist)] = 0
         #dist = (dist - dist.min()) / (dist.max() - dist.min())
 
-        return labels, boundary, dist
+        return labels_bin, boundary, dist
 
     @staticmethod
     @njit(cache=True)
