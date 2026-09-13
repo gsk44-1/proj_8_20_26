@@ -41,7 +41,7 @@ class SyntheticFluorStains(Dataset):
     def __getitem__(self, idx):
         rng = np.random.default_rng(self.seed + idx)
 
-        labels, bdry, dist = self._generate_cell_tiles(rng)
+        labels, labels_bin, bdry, dist = self._generate_cell_tiles(rng)
 
         #concentration
         conc = self._generate_conc(dist, labels, bdry, rng)
@@ -569,18 +569,19 @@ class SyntheticFluorStains(Dataset):
                 mode="inner"
             )
 
-        labels[boundary] = 0
-        labels = labels != 0
+        labels_bin = labels.copy()
+        labels_bin[boundary] = 0
+        labels_bin = labels != 0
 
-        dist_labels = dist_t(labels)
-        labels_bin = dist_labels > 3
+        dist_labels_bin = dist_t(labels_bin)
+        labels_bin = dist_labels_bin > 3
 
 
         #dist will be used for rings
         dist[np.isinf(dist)] = 0
         #dist = (dist - dist.min()) / (dist.max() - dist.min())
 
-        return labels_bin, boundary, dist
+        return labels, labels_bin, boundary, dist
 
     @staticmethod
     @njit(cache=True)
