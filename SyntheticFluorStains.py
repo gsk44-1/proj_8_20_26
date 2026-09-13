@@ -41,14 +41,14 @@ class SyntheticFluorStains(Dataset):
     def __getitem__(self, idx):
         rng = np.random.default_rng(self.seed + idx)
 
-        labels, labels_bin, bdry, dist = self._generate_cell_tiles(rng)
+        labels, markers, bdry, dist = self._generate_cell_tiles(rng)
 
         #concentration
         conc = self._generate_conc(dist, labels, bdry, rng)
 
         out_vol = self._processing(conc, rng)
 
-        return out_vol, labels
+        return out_vol, markers
 
 
 
