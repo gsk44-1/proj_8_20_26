@@ -495,7 +495,7 @@ class SyntheticFluorStains(Dataset):
 
         surf = (surf - surf.mean())/((np.abs(surf - surf.mean())).max())
 
-        fg = (surf > -0.2)*(surf < 0.5)
+        fg = (surf > -0.2)*(surf < 0.6)
 
         gy, gx = np.gradient(surf)
         grad_mag = np.sqrt(gx**2 + gy**2)
@@ -531,7 +531,7 @@ class SyntheticFluorStains(Dataset):
         ratio = 2 + 2*(grad_mag)
 
         seeds, labels, dist = self._anisotropic_lloyd_relaxation(
-            fg,
+            np.full((self.z_slices, self.N, self.N), 1),
             seeds0,
             theta,
             ratio,
