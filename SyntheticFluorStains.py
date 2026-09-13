@@ -12,6 +12,7 @@ from scipy.ndimage import gaussian_filter, find_objects, minimum_filter, maximum
 from scipy.signal import fftconvolve
 from skimage.restoration import richardson_lucy
 import psfmodels as psfm
+from scipy.interpolate import PchipInterpolator
 
 
 from numba import njit
@@ -40,10 +41,10 @@ class SyntheticFluorStains(Dataset):
     def __getitem__(self, idx):
         rng = np.random.default_rng(self.seed + idx)
 
-        structure, labels, bdry, dist = self._generate_cell_tiles(rng)
+        labels, bdry, dist = self._generate_cell_tiles(rng)
 
         #concentration
-        conc = self._generate_conc(dist, structure, labels, bdry, rng)
+        conc = self._generate_conc(dist, labels, bdry, rng)
 
         out_vol = self._processing(conc, rng)
 
@@ -221,7 +222,8 @@ class SyntheticFluorStains(Dataset):
                 A33 = 0.5 * (
                     a33[z, y, x] + a33[zz, yy, xx]
                 )
-                
+
+                avg_scale = 0.5 * (scale[z,y,x] + scale[zz,yy,xx])
                 #test - 
                 '''
                 A11 = a11[z, y, x]
@@ -235,7 +237,7 @@ class SyntheticFluorStains(Dataset):
                     + 2.0 * A12 * dx * dy
                     + A22 * dy * dy
                     + A33 * dz * dz
-                ) * scale[z,y,x]
+                ) * avg_scale
 
                 if not math.isfinite(step_cost):
                     print("bad step_cost:", step_cost)
@@ -455,8 +457,7 @@ class SyntheticFluorStains(Dataset):
         _, nearest_seed = tree.query(locs, k=1)
 
         spacing_map = dists_others[nearest_seed].reshape(self.z_slices, self.N, self.N)
-        spacing_map = 10*np.sin(spacing_map/10)#cap at roughly 15 radius
-        spacing_map = np.maximum(spacing_map, 10)
+        spacing_map = np.minimum(spacing_map, 15)
         R = gaussian_filter(spacing_map, sigma=(0, 10, 10))
 
         # Final tessellation
@@ -465,7 +466,7 @@ class SyntheticFluorStains(Dataset):
         ).astype(np.int64)
 
         labels, dist = self._anisotropic_geodesic_voronoi_numba(
-            mask,
+            np.full((self.z_slices, self.N, self.N), 1),
             seed_pixels,
             theta,
             ratio,
@@ -509,34 +510,28 @@ class SyntheticFluorStains(Dataset):
         '''
         
         theta = np.arctan2(gy, gx)
-
-        delta = 0.1
-        noise = rng.uniform(-delta, delta, size=theta.shape)
-        theta = (theta + noise) % (2 * np.pi)
-        
         theta = np.repeat(theta[None, :, :], z_slices, axis=0)
 
         
 
         scale = np.ones((z_slices, N, N))
         dist_fg = dist_t(fg)
-        density2 = np.sqrt((dist_fg + 1))
+        density2 = (dist_fg + 1)
 
         #make 3d
         fg = np.repeat(fg[None, :, :], z_slices, axis=0)
         density2 = np.repeat(density2[None, :, :], z_slices, axis=0)
 
 
-        local_fgmax = maximum_filter(dist_fg, size=round(0.7*N/coarse.shape[0]))
+        
+        x_pts = np.array([0, 3, 8, 20])
+        y_pts = np.array([2, 4, 5, 1])
 
-        max_fg = local_fgmax.max()
+        f = PchipInterpolator(x_pts, y_pts)
+        ratio = f(np.clip(dist_fg, 0, 20))
 
-        min_ratio = 1
-        max_ratio = 4
+        ratio = np.repeat(ratio[None, :, :], z_slices, axis=0)*self._spectral_noise((z_slices, N, N), bands=np.array([[5,100],[3,50],[1, 24]]), bdwidth=0.3, lo=0.8, hi=1.5, rng=rng)
 
-        ratio = local_fgmax * (min_ratio - max_ratio)/max_fg
-        ratio += max_ratio
-        ratio = np.repeat(ratio[None, :, :], z_slices, axis=0)
 
         seeds0 = self._sample_fg_pts_density(
             fg,
@@ -553,7 +548,7 @@ class SyntheticFluorStains(Dataset):
   
 
         seeds, labels, dist = self._anisotropic_lloyd_relaxation(
-            np.full((self.z_slices, self.N, self.N), 1),
+            fg,
             seeds0,
             theta,
             ratio,
@@ -574,16 +569,12 @@ class SyntheticFluorStains(Dataset):
             )
 
         bands = np.array([[5, 100], [5, 50], [0.1, 5]])
-        # Pixels on cell boundaries or outside the foreground become zero
-        interior = (labels > 0) & (~boundary)
-        interior = np.float64(interior)
-        interior += ((boundary*self._spectral_noise(interior.shape, bands, 0.3, 0.1, 1, rng))**0.25)
 
         #dist will be used for rings
         dist[np.isinf(dist)] = 0
         #dist = (dist - dist.min()) / (dist.max() - dist.min())
 
-        return interior, labels, boundary, dist
+        return labels, boundary, dist
 
     @staticmethod
     @njit(cache=True)
@@ -623,8 +614,12 @@ class SyntheticFluorStains(Dataset):
 
         return out
 
-    def _generate_conc(self, dist, structure, labels, bdry, rng):
+    def _generate_conc(self, dist, labels, bdry, rng):
         local_sz = 15  # neighborhood width
+        z_slices = self.z_slices
+        N = self.N
+        vol_shape = (z_slices, N, N)
+
 
         ring = dist**6
 
@@ -634,11 +629,11 @@ class SyntheticFluorStains(Dataset):
         ring_normal = (ring - local_ringmin) / (local_ringmax - local_ringmin + 1e-8)
 
         bands = np.array([[1, 100], [4, 50], [1, 20], [0.3, 10], [0.1, 5]])
-        ring_normal *= self._spectral_noise(ring.shape, bands, 0.5, 0.5, 2, rng)
+        ring_normal *= self._spectral_noise(vol_shape, bands, 0.5, 0.5, 2, rng)
 
 
 
-        big_noise_shape = (round(structure.shape[0]*1.5), round(structure.shape[1]*1.5), round(structure.shape[2]*1.5))
+        big_noise_shape = (round(z_slices*1.5), round(N*1.5), round(N*1.5))
 
         bands = np.array([[25, 100], [15, 50], [8, 25], [10, 17], [12, 14], [7, 8], [3, 5], [0.8, 3], [0.6, 1]])
         noise_map = self._spectral_noise(big_noise_shape, bands, 0.3, 0, 1., rng)
@@ -656,45 +651,42 @@ class SyntheticFluorStains(Dataset):
         bands = np.array([[25, 100], [15, 50], [8, 25]])
 
 
-        conc = conc*(1-(np.float32(bdry)*mod_noise[:self.z_slices, :self.N, :self.N]))
+        conc = conc*(1-(np.float32(bdry)*mod_noise[:z_slices, :N, :N]))
 
         conc = conc**2
 
         return conc
 
     def _processing(self, conc, rng):
-        num_iter_rl = 5
-        na1 = 0.8
-        na2 = 0.9
+        num_iter_rl = rng.integers(3, 7)
+        na1 = rng.uniform(0.6, 0.95)
+        na2 = rng.uniform(0.6, 0.95)
 
-        sigma = 0.04 #stddev of poisson noise in between 
-
+        pz1 = rng.uniform(-0.5, 0.5)
+        pz2 = rng.uniform(-0.5, 0.5)
 
         psf = psfm.vectorial_psf_centered(nz=15, dz=0.2, nx=31, dxy=0.1125,
-                                        pz=0.0, wvl=0.461,
-                                        params=dict(NA=0.8, ni=1., ni0=1.0,
+                                        pz=pz1, wvl=0.461,
+                                        params=dict(NA=na1, ni=1., ni0=1.0,
                                                     ns=1.40, tg=0, tg0=0))
         psf /= psf.sum()
 
         blurred = fftconvolve(conc, psf, mode="same")
 
-
-
-        rate = 1 / sigma**2 
-        noise = rng.poisson(lam=rate, size=(self.N, self.N))/rate
         blurred = (blurred - blurred.min())/(blurred.max() - blurred.min())
-        blurred = (blurred + 0.05)*noise
+        photons = 1000
+        noisy = rng.poisson(blurred * photons) / photons
 
         #different psf
         psf = psfm.vectorial_psf_centered(nz=5, dz=0.2, nx=25, dxy=0.1125,
-                                        pz=0.0, wvl=0.461,
-                                        params=dict(NA=0.9, ni=1., ni0=1.0,
+                                        pz=pz2, wvl=0.461,
+                                        params=dict(NA=na2, ni=1., ni0=1.0,
                                                     ns=1.40, tg=0, tg0=0))
         psf /= psf.sum()
 
 
         recovered = richardson_lucy(
-            blurred,
+            noisy,
             psf,
             num_iter=num_iter_rl,
             clip=False
