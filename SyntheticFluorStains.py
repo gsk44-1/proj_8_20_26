@@ -658,7 +658,7 @@ class SyntheticFluorStains(Dataset):
         objs = find_objects(labels)
 
         conc = self._assign_noise_to_labels(noise_map, objs, labels, rng)
-        conc = conc*(ring_normal+1.0) + (0.2*ring_normal)
+        conc = conc*(ring_normal+1.0) + (0.15*ring_normal)
 
         bands = np.array([[25, 100], [15, 50], [8, 25]])
 
@@ -699,7 +699,7 @@ class SyntheticFluorStains(Dataset):
         '''
 
         lam = blurred * photons
-        print("lambda max:", lam.max())
+        #print("lambda max:", lam.max())
         noisy = rng.poisson(blurred * photons) / photons
 
         #different psf
