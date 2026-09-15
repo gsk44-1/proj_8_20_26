@@ -657,20 +657,20 @@ class SyntheticFluorStains(Dataset):
 
         bands = np.array([[25, 100], [15, 50], [8, 25]])
 
+        conc = (conc - conc.min()) / (conc.max() - conc.min() + 1e-8)
 
         conc = conc*(1-(np.float32(bdry)*mod_noise[:z_slices, :N, :N]))
-
         conc = conc**2
-
+        #output should be [0, 1]
         return conc
 
     def _processing(self, conc, rng):
-        num_iter_rl = rng.integers(3, 7)
+        num_iter_rl = rng.integers(0, 7)
         na1 = rng.uniform(0.6, 0.95)
         na2 = rng.uniform(0.6, 0.95)
 
-        pz1 = rng.uniform(0, 0.5)
-        pz2 = rng.uniform(0, 0.5)
+        pz1 = rng.uniform(0, 10)
+        pz2 = rng.uniform(0, 10)
 
         psf = psfm.vectorial_psf_centered(nz=15, dz=0.2, nx=31, dxy=0.1125,
                                         pz=pz1, wvl=0.461,
@@ -680,8 +680,7 @@ class SyntheticFluorStains(Dataset):
 
         blurred = fftconvolve(conc, psf, mode="same")
 
-        blurred = (blurred - blurred.min())/(blurred.max() - blurred.min())
-        photons = 1000
+        photons = rng.uniform(500, 1500)
         noisy = rng.poisson(blurred * photons) / photons
 
         #different psf
@@ -698,4 +697,50 @@ class SyntheticFluorStains(Dataset):
             num_iter=num_iter_rl,
             clip=False
         )
-        return recovered
+
+        #normalize
+        scale = np.percentile(recovered, 99.9)
+        recovered = np.clip(recovered / max(scale, 1e-8), 0, 1)
+
+        altered_img = self._random_bezier_transform(recovered, rng)
+        altered_img = self._contrast(altered_img, rng)
+        altered_img = self._brightness_scale(altered_img, rng)
+        return altered_img
+
+    def _random_bezier_transform(self, image, rng=None):
+        if rng is None:
+            rng = np.random.default_rng()
+
+        x1, x2 = np.sort(rng.uniform(0.2, 0.8, size=2))
+        y1, y2 = np.sort(rng.uniform(0.2, 0.8, size=2))
+
+        p0 = np.array([0.0, 0.0])
+        p1 = np.array([x1, y1])
+        p2 = np.array([x2, y2])
+        p3 = np.array([1.0, 1.0])
+
+        x_curve, y_curve = self._bezier_curve(p0, p1, p2, p3)
+
+        return np.interp(image, x_curve, y_curve)
+
+
+    def _bezier_curve(self, p0, p1, p2, p3, n=256):
+        t = np.linspace(0, 1, n)
+
+        curve = (
+            (1 - t)[:, None]**3 * p0
+            + 3 * (1 - t)[:, None]**2 * t[:, None] * p1
+            + 3 * (1 - t)[:, None] * t[:, None]**2 * p2
+            + t[:, None]**3 * p3
+        )
+
+        return curve[:, 0], curve[:, 1]
+
+    def _brightness_scale(self, image, rng):
+        a = rng.uniform(0.8, 1.2)
+        return image * a
+
+    def _contrast(self, image, rng):
+        c = rng.uniform(0.8, 1.2)
+        mu = image.mean()
+        return mu + c * (image - mu)
