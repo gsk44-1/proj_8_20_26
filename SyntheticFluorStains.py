@@ -581,10 +581,12 @@ class SyntheticFluorStains(Dataset):
         labels_bin = dist_labels_bin > 3
 
         #dist will be used for rings
-        dist[np.isinf(dist_labels_bin)] = 0
-        #dist = (dist - dist.min()) / (dist.max() - dist.min())
+        dist_labels_bin = dist_labels_bin.max() - dist_labels_bin
+        dist_labels_bin[np.isinf(dist_labels_bin)] = 0
+        dist_labels_bin = (dist_labels_bin - dist_labels_bin.min()) / (dist_labels_bin.max() - dist_labels_bin.min())
 
-        return labels, labels_bin, boundary, dist
+
+        return labels, labels_bin, boundary, dist_labels_bin
 
     @staticmethod
     @njit(cache=True)
@@ -656,7 +658,7 @@ class SyntheticFluorStains(Dataset):
         objs = find_objects(labels)
 
         conc = self._assign_noise_to_labels(noise_map, objs, labels, rng)
-        conc = conc*(ring_normal+1.0) + (0.3*ring_normal)
+        conc = conc*(ring_normal+1.0) + (0.2*ring_normal)
 
         bands = np.array([[25, 100], [15, 50], [8, 25]])
 
@@ -667,6 +669,7 @@ class SyntheticFluorStains(Dataset):
         #output should be [0, 1]
         if np.isnan(conc).any() or (conc < 0).any():
             print("Array has NaNs or negative values")
+          
         return conc
 
     def _processing(self, conc, rng):
@@ -674,8 +677,8 @@ class SyntheticFluorStains(Dataset):
         na1 = rng.uniform(0.6, 0.95)
         na2 = rng.uniform(0.6, 0.95)
 
-        pz1 = rng.uniform(0, 10)
-        pz2 = rng.uniform(0, 10)
+        pz1 = rng.uniform(0, 2)
+        pz2 = rng.uniform(0, 2)
 
         psf = psfm.vectorial_psf_centered(nz=15, dz=0.2, nx=31, dxy=0.1125,
                                         pz=pz1, wvl=0.461,
@@ -687,6 +690,15 @@ class SyntheticFluorStains(Dataset):
         blurred = np.clip(blurred, 0, None)
 
         photons = rng.uniform(500, 1500)
+
+        print("blurred min:", blurred.min())
+        print("blurred max:", blurred.max())
+        print("blurred mean:", blurred.mean())
+        print("finite:", np.isfinite(blurred).all())
+        print("photons:", photons)
+
+        lam = blurred * photons
+        print("lambda max:", lam.max())
         noisy = rng.poisson(blurred * photons) / photons
 
         #different psf
@@ -709,16 +721,19 @@ class SyntheticFluorStains(Dataset):
         recovered = np.clip(recovered / max(scale, 1e-8), 0, 1)
 
         altered_img = self._random_bezier_transform(recovered, rng)
-        altered_img = self._contrast(altered_img, rng)
-        altered_img = self._brightness_scale(altered_img, rng)
+        #altered_img = self._contrast(altered_img, rng)
+        #altered_img = self._brightness_scale(altered_img, rng)
         return altered_img
 
     def _random_bezier_transform(self, image, rng=None):
         if rng is None:
             rng = np.random.default_rng()
 
-        x1, x2 = np.sort(rng.uniform(0.2, 0.8, size=2))
-        y1, y2 = np.sort(rng.uniform(0.2, 0.8, size=2))
+      
+        x1 = rng.uniform(0.2, 0.5)
+        y1 = rng.uniform(0.2, 0.5)
+        x2 = rng.uniform(0.5, 0.8)
+        y2 = rng.uniform(0.5, 0.8)
 
         p0 = np.array([0.0, 0.0])
         p1 = np.array([x1, y1])
