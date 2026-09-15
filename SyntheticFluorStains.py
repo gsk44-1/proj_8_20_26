@@ -690,12 +690,13 @@ class SyntheticFluorStains(Dataset):
         blurred = np.clip(blurred, 0, None)
 
         photons = rng.uniform(500, 1500)
-
+        '''
         print("blurred min:", blurred.min())
         print("blurred max:", blurred.max())
         print("blurred mean:", blurred.mean())
         print("finite:", np.isfinite(blurred).all())
         print("photons:", photons)
+        '''
 
         lam = blurred * photons
         print("lambda max:", lam.max())
