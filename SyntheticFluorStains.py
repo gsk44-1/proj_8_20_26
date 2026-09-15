@@ -722,8 +722,8 @@ class SyntheticFluorStains(Dataset):
         recovered = np.clip(recovered / max(scale, 1e-8), 0, 1)
 
         altered_img = self._random_bezier_transform(recovered, rng)
-        #altered_img = self._contrast(altered_img, rng)
-        #altered_img = self._brightness_scale(altered_img, rng)
+        altered_img = self._contrast(altered_img, rng)
+        altered_img = self._brightness_scale(altered_img, rng)
         return altered_img
 
     def _random_bezier_transform(self, image, rng=None):
