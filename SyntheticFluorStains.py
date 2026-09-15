@@ -573,12 +573,15 @@ class SyntheticFluorStains(Dataset):
         labels_bin[boundary] = 0
         labels_bin = labels_bin != 0
 
-        dist_labels_bin = dist_t(labels_bin)
+        dist_labels_bin = np.empty(labels_bin.shape, dtype=float)
+
+        for z in range(labels_bin.shape[0]):
+            dist_labels_bin[z] = dist_t(labels_bin[z])
+
         labels_bin = dist_labels_bin > 3
 
-
         #dist will be used for rings
-        dist[np.isinf(dist)] = 0
+        dist[np.isinf(dist_labels_bin)] = 0
         #dist = (dist - dist.min()) / (dist.max() - dist.min())
 
         return labels, labels_bin, boundary, dist
