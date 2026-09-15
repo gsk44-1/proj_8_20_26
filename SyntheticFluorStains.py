@@ -662,6 +662,8 @@ class SyntheticFluorStains(Dataset):
         conc = conc*(1-(np.float32(bdry)*mod_noise[:z_slices, :N, :N]))
         conc = conc**2
         #output should be [0, 1]
+        if np.isnan(conc).any() or (conc < 0).any():
+            print("Array has NaNs or negative values")
         return conc
 
     def _processing(self, conc, rng):
@@ -679,6 +681,7 @@ class SyntheticFluorStains(Dataset):
         psf /= psf.sum()
 
         blurred = fftconvolve(conc, psf, mode="same")
+        blurred = np.clip(blurred, 0, None)
 
         photons = rng.uniform(500, 1500)
         noisy = rng.poisson(blurred * photons) / photons
