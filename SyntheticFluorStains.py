@@ -525,7 +525,7 @@ class SyntheticFluorStains(Dataset):
 
         
         x_pts = np.array([0, 3, 8, 20])
-        y_pts = np.array([2, 4, 5, 1])
+        y_pts = np.array([2, 5, 6, 1])
 
         f = PchipInterpolator(x_pts, y_pts)
         ratio = f(np.clip(dist_fg, 0, 20))
