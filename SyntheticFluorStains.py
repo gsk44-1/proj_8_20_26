@@ -39,16 +39,18 @@ class SyntheticFluorStains(Dataset):
         return self.samples_per_epoch
 
     def __getitem__(self, idx):
+        print("gettin")
         rng = np.random.default_rng(self.seed + idx)
 
         labels, markers, bdry, dist = self._generate_cell_tiles(rng)
 
+
         #concentration
-        conc = self._generate_conc(dist, labels, bdry, rng)
+        conc = self._generate_conc(dist.copy(), labels, bdry, rng)
 
         out_vol = self._processing(conc, rng)
 
-        return out_vol, markers
+        return out_vol, (dist/dist.max())
 
 
 
@@ -364,7 +366,8 @@ class SyntheticFluorStains(Dataset):
         density=None,
         n_iter=3,
         alpha=0.4,
-        R=None
+        R=None,
+        rng=np.random.default_rng()
     ):
         if R is None:
             R = np.full(mask.shape, np.inf)
@@ -456,9 +459,10 @@ class SyntheticFluorStains(Dataset):
 
         _, nearest_seed = tree.query(locs, k=1)
 
-        spacing_map = dists_others[nearest_seed].reshape(self.z_slices, self.N, self.N)
+        spacing_map = 0.8*dists_others[nearest_seed].reshape(self.z_slices, self.N, self.N)
         spacing_map = np.minimum(spacing_map, 15)
-        R = gaussian_filter(spacing_map, sigma=(0, 10, 10))
+        bands = np.array([[4, 100], [2, 50], [1, 25]])
+        R = gaussian_filter(spacing_map, sigma=(0, 10, 10)) + self._spectral_noise(mask.shape, bands, 0.3, 0, 5, rng)
 
         # Final tessellation
         seed_pixels = np.rint(
@@ -482,9 +486,10 @@ class SyntheticFluorStains(Dataset):
         N = self.N
         z_slices = self.z_slices
         z_ratio = self.z_ratio
-        n_seeds = self.n_seeds
+        n_seeds = rng.integers(round(self.n_seeds*0.6), round(self.n_seeds*2))
 
 
+        bands = np.array([[5, 100],[2, 50],[1, 25]]) #bands for coarse noise
 
         coarse = rng.random((N//42, N//42))
 
@@ -496,27 +501,22 @@ class SyntheticFluorStains(Dataset):
 
         surf = (surf - surf.mean())/((np.abs(surf - surf.mean())).max())
 
-        fg = (surf > -0.2)*(surf < 0.6)
+        fg = (surf > -0.5)*(surf < 0.5)
 
         gy, gx = np.gradient(surf)
         
-        ''' 
-        grad_mag = np.sqrt(gx**2 + gy**2)
-        grad_mag = (
-            (grad_mag - grad_mag.min()) /
-            (grad_mag.max() - grad_mag.min())
-        )
-        grad_mag = np.repeat(grad_mag[None, :, :], z_slices, axis=0)
-        '''
         
         theta = np.arctan2(gy, gx)
         theta = np.repeat(theta[None, :, :], z_slices, axis=0)
+        theta += (self._spectral_noise((z_slices, N, N), bands, 0.3, -np.pi/4, np.pi/4) )
 
         
-
-        scale = np.ones((z_slices, N, N))
+        
         dist_fg = dist_t(fg)
-        density2 = (dist_fg + 1)
+        density2 = np.ones((N, N))#(dist_fg + 1)
+
+        scale = self._spectral_noise((z_slices, N, N), bands, 0.3, 0.5, 3, rng)
+
 
         #make 3d
         fg = np.repeat(fg[None, :, :], z_slices, axis=0)
@@ -524,14 +524,14 @@ class SyntheticFluorStains(Dataset):
 
 
         
-        x_pts = np.array([0, 3, 8, 20])
-        y_pts = np.array([2, 4, 5, 1])
+        #x_pts = np.array([0, rng.integers(1, 8), rng.integers(8, 16), 20])
+        #y_pts = np.array([rng.integers(1, 4), rng.integers(2, 6), rng.integers(2, 6), rng.integers(1, 2)])
 
-        f = PchipInterpolator(x_pts, y_pts)
-        ratio = f(np.clip(dist_fg, 0, 20))
+        #f = PchipInterpolator(x_pts, y_pts)
+        #ratio = f(np.clip(dist_fg, 0, 20))
 
-        ratio = np.repeat(ratio[None, :, :], z_slices, axis=0)*self._spectral_noise((z_slices, N, N), bands=np.array([[5,100],[3,50],[1, 24]]), bdwidth=0.3, lo=0.8, hi=1.5, rng=rng)
-
+        #ratio = np.repeat(ratio[None, :, :], z_slices, axis=0)*self._spectral_noise((z_slices, N, N), bands=np.array([[5,100],[3,50],[1, 24]]), bdwidth=0.3, lo=0.8, hi=1.5, rng=rng)
+        ratio = self._spectral_noise((z_slices, N, N), bands, 0.3, 1, 6, rng)
 
         seeds0 = self._sample_fg_pts_density(
             fg,
@@ -555,9 +555,10 @@ class SyntheticFluorStains(Dataset):
             scale,
             z_ratio,
             density=None,
-            n_iter=5,
+            n_iter=rng.integers(4, 7),
             alpha=1.0,
             R=None,
+            rng=rng,
         )
 
         boundary = np.zeros_like(labels, dtype=bool)
@@ -571,22 +572,19 @@ class SyntheticFluorStains(Dataset):
 
         labels_bin = labels.copy()
         labels_bin[boundary] = 0
+        labels_bin[np.isinf(labels_bin)] = 0
         labels_bin = labels_bin != 0
 
-        dist_labels_bin = np.empty(labels_bin.shape, dtype=float)
+        dist_labels_bin_r = np.zeros(labels_bin.shape, dtype=float)
 
         for z in range(labels_bin.shape[0]):
-            dist_labels_bin[z] = dist_t(labels_bin[z])
+            dist_labels_bin_r[z] = dist_t(labels_bin[z])
 
-        labels_bin = dist_labels_bin > 3
+        labels_bin = dist_labels_bin_r > 3
 
         #dist will be used for rings
-        dist_labels_bin = dist_labels_bin.max() - dist_labels_bin
-        dist_labels_bin[np.isinf(dist_labels_bin)] = 0
-        dist_labels_bin = (dist_labels_bin - dist_labels_bin.min()) / (dist_labels_bin.max() - dist_labels_bin.min())
 
-
-        return labels, labels_bin, boundary, dist_labels_bin
+        return labels, labels_bin, boundary, dist_labels_bin_r
 
     @staticmethod
     @njit(cache=True)
@@ -632,7 +630,9 @@ class SyntheticFluorStains(Dataset):
         N = self.N
         vol_shape = (z_slices, N, N)
 
-
+        dist[dist == 0] = dist.max()
+        dist = dist.max() - dist
+        dist /= dist.max()
         ring = dist**6
 
         local_ringmin = minimum_filter(ring, size=local_sz)
@@ -643,14 +643,15 @@ class SyntheticFluorStains(Dataset):
         bands = np.array([[1, 100], [4, 50], [1, 20], [0.3, 10], [0.1, 5]])
         ring_normal *= self._spectral_noise(vol_shape, bands, 0.5, 0.5, 2, rng)
 
+        prenoise_conc = np.float32(dist!=0) + (ring_normal)
 
-
+        #assigning noise to different regions
         big_noise_shape = (round(z_slices*1.5), round(N*1.5), round(N*1.5))
 
         bands = np.array([[25, 100], [15, 50], [8, 25], [10, 17], [12, 14], [7, 8], [3, 5], [0.8, 3], [0.6, 1]])
         noise_map = self._spectral_noise(big_noise_shape, bands, 0.3, 0, 1., rng)
 
-        bands = np.array([[25, 100], [15, 50], [8, 25]])
+        bands = np.array([[25, 150], [15, 100], [8, 50]])
         mod_noise = self._spectral_noise(big_noise_shape, bands, 0.4, 0.1, 1., rng)
 
         noise_map *= mod_noise
@@ -658,14 +659,12 @@ class SyntheticFluorStains(Dataset):
         objs = find_objects(labels)
 
         conc = self._assign_noise_to_labels(noise_map, objs, labels, rng)
-        conc = conc*(ring_normal+1.0) + (0.15*ring_normal)
-
-        bands = np.array([[25, 100], [15, 50], [8, 25]])
+        
+        conc *= prenoise_conc
 
         conc = (conc - conc.min()) / (conc.max() - conc.min() + 1e-8)
 
-        conc = conc*(1-(np.float32(bdry)*mod_noise[:z_slices, :N, :N]))
-        conc = conc**2
+      
         #output should be [0, 1]
         if np.isnan(conc).any() or (conc < 0).any():
             print("Array has NaNs or negative values")
