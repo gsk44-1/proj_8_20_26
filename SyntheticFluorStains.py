@@ -458,10 +458,13 @@ class SyntheticFluorStains(Dataset):
 
         _, nearest_seed = tree.query(locs, k=1)
 
-        spacing_map = 0.8*dists_others[nearest_seed].reshape(self.z_slices, self.N, self.N)
+        
+        spacing_map = dists_others[nearest_seed].reshape(self.z_slices, self.N, self.N)
         spacing_map = np.minimum(spacing_map, 15)
+        
         bands = np.array([[4, 100], [2, 50], [1, 25]])
-        R = gaussian_filter(spacing_map, sigma=(0, 10, 10)) + self._spectral_noise(mask.shape, bands, 0.3, 0, 5, rng)
+        siz_factor = self._spectral_noise(mask.shape, np.array([[5, 140], [0.5, 30], [0.1, 15], [0.05, 7]]), 0.7, 0.3, 1, rng)
+        R = siz_factor*gaussian_filter(spacing_map, sigma=(0, 10, 10)) + self._spectral_noise(mask.shape, bands, 0.7, 0, 5, rng)
 
         # Final tessellation
         seed_pixels = np.rint(
@@ -506,8 +509,8 @@ class SyntheticFluorStains(Dataset):
         
         #theta = np.arctan2(gy, gx)
         #theta = np.repeat(theta[None, :, :], z_slices, axis=0)
-        bands_theta = np.array([[5, 140], [0.05, 30], [0.01, 15], [0.005, 7]]) #bands for coarse noise
-        theta = (self._spectral_noise((z_slices, N, N), bands_theta, 0.7, -np.pi, np.pi) )
+        bands_theta = np.array([[5, 140], [0.1, 30]])
+        theta = (self._spectral_noise((z_slices, N, N), bands_theta, 0.7, -np.pi/2, np.pi/2) )
         
         
         dist_fg = dist_t(fg)
@@ -526,9 +529,9 @@ class SyntheticFluorStains(Dataset):
         #ratio = f(np.clip(dist_fg, 0, 20))
 
         #ratio = np.repeat(ratio[None, :, :], z_slices, axis=0)*self._spectral_noise((z_slices, N, N), bands=np.array([[5,100],[3,50],[1, 24]]), bdwidth=0.3, lo=0.8, hi=1.5, rng=rng)
-        bands_ratio = np.array([[5, 100],[1, 50]]) #bands for coarse noise
-        ratio = self._spectral_noise((z_slices, N, N), bands_ratio, 0.7, 1, 8, rng)
-        scale = self._spectral_noise((z_slices, N, N), bands_ratio, 0.7, 0.5, 2.5, rng)
+        bands_ratio = np.array([[5, 100],[1, 50], [0.5, 25], [0.25, 11], [0.1, 5]]) #bands for coarse noise
+        ratio = self._spectral_noise((z_slices, N, N), bands_ratio, 0.8, 1, 8, rng)
+        scale = self._spectral_noise((z_slices, N, N), bands_ratio, 0.8, 0.8, 1.5, rng)
 
 
         seeds0 = self._sample_fg_pts_density(
@@ -578,7 +581,7 @@ class SyntheticFluorStains(Dataset):
         for z in range(labels_bin.shape[0]):
             dist_labels_bin_r[z] = dist_t(labels_bin[z])
 
-        labels_bin = dist_labels_bin_r > 3
+        labels_bin = dist_labels_bin_r > 2
 
         #dist will be used for rings
 
@@ -695,6 +698,10 @@ class SyntheticFluorStains(Dataset):
         print("photons:", photons)
         '''
 
+        bg_noise_lvl = rng.uniform(0, 0.2)
+        bands = np.array([[5, 140], [0.05, 30], [0.01, 15], [0.005, 7]])
+        backg = self._spectral_noise(conc.shape, bands, 0.7, 0, bg_noise_lvl, rng)
+        blurred += backg
         lam = blurred * photons
         #print("lambda max:", lam.max())
         noisy = rng.poisson(blurred * photons) / photons

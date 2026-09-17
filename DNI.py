@@ -10,9 +10,9 @@ def cubic_iter(x, s=15, num_iter=3):
     #s is alpha in the double well paper = 2tau lambda / epsilon
     xx = x  # we start with v_0 = u_n
     for _ in range(num_iter):
-        out = (x - 2.*s.xx**3 + 3.*s*xx**2)/(1.+s)
+        out = (x - 2.*s*xx**3 + 3.*s*xx**2)/(1.+s)
         xx = out
-    return out
+    return xx
 
 def laplace_kern(in_chan, out_chan):
     weight=torch.zeros(out_chan, in_chan, 3, 3, requires_grad=False)
@@ -55,7 +55,7 @@ class UNET(nn.Module):
             nn.ConvTranspose2d(features[-1]*2, features[-1], kernel_size=2, stride=2)
         )
         self.ups.append(
-            DoubleConv(features[-1]*2, feature[-1])
+            DoubleConv(features[-1]*2, features[-1])
         ) #we have twice the number of expected channels because of concatenation
 
         for j in reversed(range(len(features)-1)):
@@ -122,7 +122,7 @@ class ConvBlock(nn.Module):
 class DNI(nn.Module):
     def __init__(self,features=[64,128,256],num_blocks=1):
         super(DNI,self).__init__()
-        self.layer1=nn.Conv2d(3, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular',bias=False)
+        self.layer1=nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular',bias=False)
         self.final=nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular')
         self.BN1=nn.BatchNorm2d(1)
         self.sig = nn.Sigmoid()
@@ -130,7 +130,7 @@ class DNI(nn.Module):
         self.blocks=nn.ModuleList()
         self.num_blocks=num_blocks
         self.features=features
-        self.F=UNET(features=self.features) #this will be replaced with a function of both x and f
+        self.F=UNET(in_chan=1, out_chan=1, features=self.features) #this will be replaced with a function of both x and f
         
         for idx in range(self.num_blocks):
             self.blocks.append(ConvBlock())
@@ -147,7 +147,7 @@ class DNI(nn.Module):
         
         out=self.final(out)
 
-        out=self.sig(out)
+        #out=self.sig(out)
 
 
         return out
