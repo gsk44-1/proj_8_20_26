@@ -39,7 +39,6 @@ class SyntheticFluorStains(Dataset):
         return self.samples_per_epoch
 
     def __getitem__(self, idx):
-        print("gettin")
         rng = np.random.default_rng(self.seed + idx)
 
         labels, markers, bdry, dist = self._generate_cell_tiles(rng)
@@ -50,7 +49,7 @@ class SyntheticFluorStains(Dataset):
 
         out_vol = self._processing(conc, rng)
 
-        return out_vol, (dist/dist.max())
+        return out_vol, markers #(dist/dist.max())
 
 
 
@@ -489,8 +488,7 @@ class SyntheticFluorStains(Dataset):
         n_seeds = rng.integers(round(self.n_seeds*0.6), round(self.n_seeds*2))
 
 
-        bands = np.array([[5, 100],[2, 50],[1, 25]]) #bands for coarse noise
-
+    
         coarse = rng.random((N//42, N//42))
 
         zoom_tup = (N/coarse.shape[0] + 1, N/coarse.shape[1] + 1)
@@ -506,17 +504,14 @@ class SyntheticFluorStains(Dataset):
         gy, gx = np.gradient(surf)
         
         
-        theta = np.arctan2(gy, gx)
-        theta = np.repeat(theta[None, :, :], z_slices, axis=0)
-        theta += (self._spectral_noise((z_slices, N, N), bands, 0.3, -np.pi/4, np.pi/4) )
-
+        #theta = np.arctan2(gy, gx)
+        #theta = np.repeat(theta[None, :, :], z_slices, axis=0)
+        bands_theta = np.array([[5, 140], [0.05, 30], [0.01, 15], [0.005, 7]]) #bands for coarse noise
+        theta = (self._spectral_noise((z_slices, N, N), bands_theta, 0.7, -np.pi, np.pi) )
         
         
         dist_fg = dist_t(fg)
         density2 = np.ones((N, N))#(dist_fg + 1)
-
-        scale = self._spectral_noise((z_slices, N, N), bands, 0.3, 0.5, 3, rng)
-
 
         #make 3d
         fg = np.repeat(fg[None, :, :], z_slices, axis=0)
@@ -531,12 +526,15 @@ class SyntheticFluorStains(Dataset):
         #ratio = f(np.clip(dist_fg, 0, 20))
 
         #ratio = np.repeat(ratio[None, :, :], z_slices, axis=0)*self._spectral_noise((z_slices, N, N), bands=np.array([[5,100],[3,50],[1, 24]]), bdwidth=0.3, lo=0.8, hi=1.5, rng=rng)
-        ratio = self._spectral_noise((z_slices, N, N), bands, 0.3, 1, 6, rng)
+        bands_ratio = np.array([[5, 100],[1, 50]]) #bands for coarse noise
+        ratio = self._spectral_noise((z_slices, N, N), bands_ratio, 0.7, 1, 8, rng)
+        scale = self._spectral_noise((z_slices, N, N), bands_ratio, 0.7, 0.5, 2.5, rng)
+
 
         seeds0 = self._sample_fg_pts_density(
             fg,
             n=n_seeds,
-            density=density2,
+            density=fg,
             rng=rng
         )
 
@@ -651,7 +649,7 @@ class SyntheticFluorStains(Dataset):
         bands = np.array([[25, 100], [15, 50], [8, 25], [10, 17], [12, 14], [7, 8], [3, 5], [0.8, 3], [0.6, 1]])
         noise_map = self._spectral_noise(big_noise_shape, bands, 0.3, 0, 1., rng)
 
-        bands = np.array([[25, 150], [15, 100], [8, 50]])
+        bands = np.array([[25, 150], [15, 100], [8, 50], [3, 25], [1, 10]])
         mod_noise = self._spectral_noise(big_noise_shape, bands, 0.4, 0.1, 1., rng)
 
         noise_map *= mod_noise
@@ -688,7 +686,7 @@ class SyntheticFluorStains(Dataset):
         blurred = fftconvolve(conc, psf, mode="same")
         blurred = np.clip(blurred, 0, None)
 
-        photons = rng.uniform(500, 1500)
+        photons = rng.uniform(100, 5500)
         '''
         print("blurred min:", blurred.min())
         print("blurred max:", blurred.max())
@@ -731,9 +729,9 @@ class SyntheticFluorStains(Dataset):
 
       
         x1 = rng.uniform(0.2, 0.5)
-        y1 = rng.uniform(0.2, 0.5)
+        y1 = rng.uniform(0.1, 0.6)
         x2 = rng.uniform(0.5, 0.8)
-        y2 = rng.uniform(0.5, 0.8)
+        y2 = rng.uniform(0.4, 0.9)
 
         p0 = np.array([0.0, 0.0])
         p1 = np.array([x1, y1])
@@ -758,10 +756,10 @@ class SyntheticFluorStains(Dataset):
         return curve[:, 0], curve[:, 1]
 
     def _brightness_scale(self, image, rng):
-        a = rng.uniform(0.8, 1.2)
+        a = rng.uniform(0.5, 1.5)
         return image * a
 
     def _contrast(self, image, rng):
-        c = rng.uniform(0.8, 1.2)
+        c = rng.uniform(0.5, 1.5)
         mu = image.mean()
         return mu + c * (image - mu)
