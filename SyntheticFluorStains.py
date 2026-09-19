@@ -55,7 +55,7 @@ class SyntheticFluorStains(Dataset):
         for j in range(self.z_slices):
           nonnuc[j] = nonnuc[j] & ~binary_erosion(nonnuc[j], structure=structure)
 
-        labels = np.stack([markers, nonnuc])
+        labels = np.stack([markers, nonnuc], axis=1)
         #print(f" marker shape {markers.shape}")
         return data, labels #(dist/dist.max())
 
