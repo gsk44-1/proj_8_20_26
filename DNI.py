@@ -66,6 +66,8 @@ class UNET(nn.Module):
 
         self.bottleneck = DoubleConv(features[-1], features[-1]*2)
         self.final_conv=nn.Conv2d(features[0], out_chan, kernel_size=1)
+        nn.init.zeros_(self.final_conv.weight)
+        nn.init.zeros_(self.final_conv.bias)
 
         #self.GNfinal=nn.GroupNorm(GROUPS, out_chan)
         self.sig=nn.Sigmoid()
@@ -220,4 +222,4 @@ class DNI(nn.Module):
         #out=self.sig(out)
         out = torch.cat([u_nuc, u_nonnuc], dim=1)
 
-        return out
+        return out, Ff_n, Ff_nn
