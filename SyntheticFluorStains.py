@@ -12,6 +12,8 @@ from scipy.signal import fftconvolve
 from skimage.restoration import richardson_lucy
 import psfmodels as psfm
 from scipy.interpolate import PchipInterpolator
+from skimage.morphology import disk
+from scipy.ndimage import binary_erosion
 
 
 from numba import njit
@@ -42,15 +44,20 @@ class SyntheticFluorStains(Dataset):
 
         labels, markers, bdry, dist, nonnuc = self._generate_cell_tiles(rng)
 
-
         #concentration
-        conc, conc_nonnuc = self._generate_conc(dist.copy(), labels, bdry.copy(), nonnuc, rng)
+        conc, conc_nonnuc = self._generate_conc(dist.copy(), labels, bdry.copy(), nonnuc.copy(), rng)
 
         out_vol, out_nonnuc_vol = self._processing(conc, conc_nonnuc, rng)
         data = np.stack([out_vol, out_nonnuc_vol], axis=1)
 
-        #print(f"out vol shape {data.shape}")
-        return data, markers #(dist/dist.max())
+        structure = disk(5)
+
+        for j in range(self.z_slices):
+          nonnuc[j] = nonnuc[j] & ~binary_erosion(nonnuc[j], structure=structure)
+
+        labels = np.stack([markers, nonnuc])
+        #print(f" marker shape {markers.shape}")
+        return data, labels #(dist/dist.max())
 
 
 

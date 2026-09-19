@@ -122,33 +122,56 @@ class ConvBlock(nn.Module):
 class DNI(nn.Module):
     def __init__(self,in_chan = 2, features=[64,128,256],num_blocks=1):
         super(DNI,self).__init__()
-        self.layer1=nn.Conv2d(in_chan, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular',bias=False)
-        self.final=nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+        self.layer1_n = nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular',bias=False)
+        self.layer1_nn = nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular',bias=False)
+        
+
+        self.final_n=nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+        self.final_nn=nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular')
+        
         #self.GN1=nn.GroupNorm(GROUPS, 1)
         self.sig = nn.Sigmoid()
         self.tanh = nn.Tanh()
-        self.blocks=nn.ModuleList()
+
+        self.blocks_n =nn.ModuleList()
+        self.blocks_nn =nn.ModuleList()
+
         self.num_blocks=num_blocks
         self.features=features
         self.in_chan = in_chan
-        self.F=UNET(in_chan=self.in_chan, out_chan=1, features=self.features) #this will be replaced with a function of both x and f
-        
+        self.F_n = UNET(in_chan=1, out_chan=1, features=self.features) 
+        self.F_nn = UNET(in_chan=1, out_chan=1, features=self.features) 
+
         for idx in range(self.num_blocks):
-            self.blocks.append(ConvBlock())
-            
+            self.blocks_n.append(ConvBlock())
+
+        for idx in range(self.num_blocks):
+            self.blocks_nn.append(ConvBlock())
             
     def forward(self,x):
-        out=self.layer1(x)
-        #out=self.GN1(out)
-        out=self.sig(out)
-        out=cubic_iter(out)
-        Ff=self.F(x)
+        x_n = x[:, 0:1, :, :]
+        x_nn = x[:, 1:2, :, :]
+
+        u_nuc=self.layer1_n(x)
+        u_nuc=self.sig(u_nuc)
+        u_nuc=cubic_iter(u_nuc)
+
+        u_nonnuc=self.layer1_nn(x)
+        u_nonnuc=self.sig(u_nonnuc)
+        u_nonnuc=cubic_iter(u_nonnuc)
+
+        Ff_n=self.F_n(x)
+
+        Ff_nn=self.F_nn(x)
+
         for idx in range(self.num_blocks):
-            out=self.blocks[idx](out,Ff)
+            u_nuc=self.blocks_n[idx](u_nuc,Ff_n)
+            u_nonnuc = self.blocks_nn[idx](u_nonnuc, Ff_nn)
         
-        out=self.final(out)
+        u_nuc=self.final_n(u_nuc)
+        u_nonnuc=self.final_nn(u_nonnuc)
 
         #out=self.sig(out)
-
+        out = torch.cat([u_nuc, u_nonnuc], dim=1)
 
         return out
