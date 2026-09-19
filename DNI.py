@@ -6,7 +6,7 @@ import numpy as np
 
 GROUPS = 8
 #the double well portion of the gradient, nonlinear pointwise portion
-def cubic_iter(x, s=15, num_iter=3): 
+def cubic_iter(x, s=1, num_iter=3): 
     #s is alpha in the double well paper = 2tau lambda / epsilon
     xx = x  # we start with v_0 = u_n
     for _ in range(num_iter):
@@ -97,7 +97,7 @@ class UNET(nn.Module):
 
 
 class ConvBlock(nn.Module):
-    def __init__(self):
+    def __init__(self, dt=0.1, ep = 0.2, lam = 1):
         super(ConvBlock,self).__init__()
         self.conv1=nn.Conv2d(1,1,3,1,1,padding_mode='circular', bias=False)
         #self.GN1=nn.GroupNorm(GROUPS, 1)
@@ -107,20 +107,24 @@ class ConvBlock(nn.Module):
         self.sig = nn.Sigmoid()
         self.tanh = nn.Tanh()
         self.ReLU = nn.ReLU(inplace=True)
+        self.dt = dt
+        self.lam = lam
+        self.ep = ep
         
     def forward(self,x,Ff):
         out=self.conv1(x)
         #out=self.GN1(out)
-        
-        out=x+0.5*out+0.5*self.convDiff(x)+0.5*Ff #time step is 0.5?
+        dt = self.dt
+        out=x+dt*out+dt*self.convDiff(x)+dt*Ff #time step is 0.5?
 
         out=self.sig(out)
-        out=cubic_iter(out)
+        s = 2*(self.lam)*dt / (self.ep)
+        out=cubic_iter(out, s)
         return out
 
 
 class DNI(nn.Module):
-    def __init__(self,in_chan = 2, features=[64,128,256],num_blocks=1):
+    def __init__(self,in_chan = 2, features=[64,128,256],num_blocks=1, dt=0.1, ep = 0.2, lam = 1):
         super(DNI,self).__init__()
         self.layer1_n = nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular',bias=False)
         self.layer1_nn = nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular',bias=False)
@@ -142,23 +146,28 @@ class DNI(nn.Module):
         self.F_n = UNET(in_chan=1, out_chan=1, features=self.features) 
         self.F_nn = UNET(in_chan=1, out_chan=1, features=self.features) 
 
-        for idx in range(self.num_blocks):
-            self.blocks_n.append(ConvBlock())
+        self.dt = dt
+        self.ep = ep
+        self.lam = lam
 
         for idx in range(self.num_blocks):
-            self.blocks_nn.append(ConvBlock())
+            self.blocks_n.append(ConvBlock(dt, ep, lam))
+
+        for idx in range(self.num_blocks):
+            self.blocks_nn.append(ConvBlock(dt, ep, lam))
             
     def forward(self,x):
+        s = 2*(self.lam)*(self.dt) / (self.ep)
         x_n = x[:, 0:1, :, :]
         x_nn = x[:, 1:2, :, :]
 
         u_nuc=self.layer1_n(x_n)
         u_nuc=self.sig(u_nuc)
-        u_nuc=cubic_iter(u_nuc)
+        u_nuc=cubic_iter(u_nuc, s)
 
         u_nonnuc=self.layer1_nn(x_nn)
         u_nonnuc=self.sig(u_nonnuc)
-        u_nonnuc=cubic_iter(u_nonnuc)
+        u_nonnuc=cubic_iter(u_nonnuc, s)
 
         Ff_n=self.F_n(x)
 
