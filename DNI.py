@@ -169,9 +169,9 @@ class DNI(nn.Module):
         u_nonnuc=self.sig(u_nonnuc)
         u_nonnuc=cubic_iter(u_nonnuc, s)
 
-        Ff_n=self.F_n(x)
+        Ff_n=self.F_n(x_n)
 
-        Ff_nn=self.F_nn(x)
+        Ff_nn=self.F_nn(x_nn)
 
         for idx in range(self.num_blocks):
             u_nuc=self.blocks_n[idx](u_nuc,Ff_n)
