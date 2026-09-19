@@ -49,7 +49,7 @@ class SyntheticFluorStains(Dataset):
         out_vol, out_nonnuc_vol = self._processing(conc, conc_nonnuc, rng)
         data = np.stack([out_vol, out_nonnuc_vol], axis=1)
 
-        print(f"out vol shape {data.shape}")
+        #print(f"out vol shape {data.shape}")
         return data, markers #(dist/dist.max())
 
 

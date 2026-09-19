@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import numpy as np
 
-
+GROUPS = 8
 #the double well portion of the gradient, nonlinear pointwise portion
 def cubic_iter(x, s=15, num_iter=3): 
     #s is alpha in the double well paper = 2tau lambda / epsilon
@@ -28,10 +28,10 @@ class DoubleConv(nn.Module):
         super(DoubleConv, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_chan, out_chan, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(out_chan),
+            nn.GroupNorm(GROUPS, out_chan),
             nn.ReLU(inplace=True),
             nn.Conv2d(out_chan, out_chan, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(out_chan),
+            nn.GroupNorm(GROUPS, out_chan),
             nn.ReLU(inplace=True)
         )
     def forward(self, x):
@@ -67,7 +67,7 @@ class UNET(nn.Module):
         self.bottleneck = DoubleConv(features[-1], features[-1]*2)
         self.final_conv=nn.Conv2d(features[0], out_chan, kernel_size=1)
 
-        self.BNfinal=nn.BatchNorm2d(out_chan)
+        #self.GNfinal=nn.GroupNorm(GROUPS, out_chan)
         self.sig=nn.Sigmoid()
 
     def forward(self,x):
@@ -93,14 +93,14 @@ class UNET(nn.Module):
                 concat_skip=torch.cat((skip_connection,x),dim=1)
                 x=self.ups[idx+1](concat_skip)
                 
-        return self.BNfinal(self.final_conv(x))
+        return self.final_conv(x)
 
 
 class ConvBlock(nn.Module):
     def __init__(self):
         super(ConvBlock,self).__init__()
         self.conv1=nn.Conv2d(1,1,3,1,1,padding_mode='circular', bias=False)
-        self.BN1=nn.BatchNorm2d(1)
+        #self.GN1=nn.GroupNorm(GROUPS, 1)
         self.diff=laplace_kern(1,1)
         self.convDiff=nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular', bias=False)
         self.convDiff.weight=torch.nn.Parameter(self.diff,requires_grad=False)
@@ -110,7 +110,7 @@ class ConvBlock(nn.Module):
         
     def forward(self,x,Ff):
         out=self.conv1(x)
-        out=self.BN1(out)
+        #out=self.GN1(out)
         
         out=x+0.5*out+0.5*self.convDiff(x)+0.5*Ff #time step is 0.5?
 
@@ -120,17 +120,18 @@ class ConvBlock(nn.Module):
 
 
 class DNI(nn.Module):
-    def __init__(self,features=[64,128,256],num_blocks=1):
+    def __init__(self,in_chan = 2, features=[64,128,256],num_blocks=1):
         super(DNI,self).__init__()
-        self.layer1=nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular',bias=False)
+        self.layer1=nn.Conv2d(in_chan, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular',bias=False)
         self.final=nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, padding_mode='circular')
-        self.BN1=nn.BatchNorm2d(1)
+        #self.GN1=nn.GroupNorm(GROUPS, 1)
         self.sig = nn.Sigmoid()
         self.tanh = nn.Tanh()
         self.blocks=nn.ModuleList()
         self.num_blocks=num_blocks
         self.features=features
-        self.F=UNET(in_chan=1, out_chan=1, features=self.features) #this will be replaced with a function of both x and f
+        self.in_chan = in_chan
+        self.F=UNET(in_chan=self.in_chan, out_chan=1, features=self.features) #this will be replaced with a function of both x and f
         
         for idx in range(self.num_blocks):
             self.blocks.append(ConvBlock())
@@ -138,7 +139,7 @@ class DNI(nn.Module):
             
     def forward(self,x):
         out=self.layer1(x)
-        out=self.BN1(out)
+        #out=self.GN1(out)
         out=self.sig(out)
         out=cubic_iter(out)
         Ff=self.F(x)
