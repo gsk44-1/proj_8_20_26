@@ -681,7 +681,7 @@ class SyntheticFluorStains(Dataset):
         noise_map *= mod_noise
 
         objs = find_objects(labels)
-
+        objs = [obj for obj in objs if obj is not None] #needed because sometimes there is a None in the list because obj couldn't be found.
         conc = self._assign_noise_to_labels(noise_map, objs, labels, rng)
         
         conc_nonnuc = prenoise_conc_nonnuc*noise_map[:z_slices, :N, :N]
