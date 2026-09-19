@@ -111,16 +111,53 @@ class ConvBlock(nn.Module):
         self.lam = lam
         self.ep = ep
         
-    def forward(self,x,Ff):
-        out=self.conv1(x)
+    def forward(self,x,Ff, log=False):
+        conv1=self.conv1(x)
         #out=self.GN1(out)
         dt = self.dt
-        out=x+dt*out+dt*self.convDiff(x)+dt*Ff #time step is 0.5?
+        conv_diff_x = self.convDiff(x)
+        pre_sig=x+dt*conv1+dt*conv_diff_x+dt*Ff #time step is 0.5?
 
-        out=self.sig(out)
+        post_sig=self.sig(pre_sig)
         s = 2*(self.lam)*dt / (self.ep)
-        out=cubic_iter(out, s)
-        return out
+        post_cubic=cubic_iter(post_sig, s)
+
+        if(log):
+          print(f"x min: {x.min().item()}")
+          print(f"x max: {x.max().item()}")
+          print(f"x mean: {x.mean().item()}")
+          print(f"x std: {x.std().item()}")
+
+          print(f"convdiff min: {conv_diff_x.min().item()}")
+          print(f"convdiff max: {conv_diff_x.max().item()}")
+          print(f"convdiff mean: {conv_diff_x.mean().item()}")
+          print(f"convdiff std: {conv_diff_x.std().item()}")
+
+          print(f"conv1 min: {conv1.min().item()}")
+          print(f"conv1 max: {conv1.max().item()}")
+          print(f"conv1 mean: {conv1.mean().item()}")
+          print(f"conv1 std: {conv1.std().item()}")
+
+          print(f"Ff min: {Ff.min().item()}")
+          print(f"Ff max: {Ff.max().item()}")
+          print(f"Ff mean: {Ff.mean().item()}")
+          print(f"Ff std: {Ff.std().item()}")
+
+          print(f"pre-sig min: {pre_sig.min().item()}")
+          print(f"pre-sig max: {pre_sig.max().item()}")
+          print(f"pre-sig mean: {pre_sig.mean().item()}")
+          print(f"pre-sig std: {pre_sig.std().item()}")
+
+          print(f"post-sig min: {post_sig.min().item()}")
+          print(f"post-sig max: {post_sig.max().item()}")
+          print(f"post-sig mean: {post_sig.mean().item()}")
+          print(f"post-sig std: {post_sig.std().item()}")
+
+          print(f"post-cubic min: {post_cubic.min().item()}")
+          print(f"post-cubic max: {post_cubic.max().item()}")
+          print(f"post-cubic mean: {post_cubic.mean().item()}")
+          print(f"post-cubic std: {post_cubic.std().item()}")
+        return post_cubic
 
 
 class DNI(nn.Module):
@@ -156,7 +193,7 @@ class DNI(nn.Module):
         for idx in range(self.num_blocks):
             self.blocks_nn.append(ConvBlock(dt, ep, lam))
             
-    def forward(self,x):
+    def forward(self,x, log=False):
         s = 2*(self.lam)*(self.dt) / (self.ep)
         x_n = x[:, 0:1, :, :]
         x_nn = x[:, 1:2, :, :]
@@ -174,8 +211,8 @@ class DNI(nn.Module):
         Ff_nn=self.F_nn(x_nn)
 
         for idx in range(self.num_blocks):
-            u_nuc=self.blocks_n[idx](u_nuc,Ff_n)
-            u_nonnuc = self.blocks_nn[idx](u_nonnuc, Ff_nn)
+            u_nuc=self.blocks_n[idx](u_nuc,Ff_n, log)
+            u_nonnuc = self.blocks_nn[idx](u_nonnuc, Ff_nn, log)
         
         u_nuc=self.final_n(u_nuc)
         u_nonnuc=self.final_nn(u_nonnuc)
