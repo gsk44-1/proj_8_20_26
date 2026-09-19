@@ -152,11 +152,11 @@ class DNI(nn.Module):
         x_n = x[:, 0:1, :, :]
         x_nn = x[:, 1:2, :, :]
 
-        u_nuc=self.layer1_n(x)
+        u_nuc=self.layer1_n(x_n)
         u_nuc=self.sig(u_nuc)
         u_nuc=cubic_iter(u_nuc)
 
-        u_nonnuc=self.layer1_nn(x)
+        u_nonnuc=self.layer1_nn(x_nn)
         u_nonnuc=self.sig(u_nonnuc)
         u_nonnuc=cubic_iter(u_nonnuc)
 
