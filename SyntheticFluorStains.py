@@ -674,7 +674,7 @@ class SyntheticFluorStains(Dataset):
         ring_fg = ring_fg**rng.integers(2, 4)
 
 
-        prenoise_conc_nonnuc = rng.uniform(0.15, 0.5)*(cell_bin+nonnuc) + ring_m + (ring_fg)
+        prenoise_conc_nonnuc = rng.uniform(0.15, 0.5)*(cell_bin+nonnuc) + (2*ring_m) + (ring_fg)
 
         #assigning noise to different regions
         big_noise_shape = (round(z_slices*1.5), round(N*1.5), round(N*1.5))
