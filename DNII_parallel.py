@@ -3,6 +3,11 @@ import torch.nn as nn
 import torchvision.transforms.functional as TF
 
 
+
+
+
+
+
 GROUPS = 8
 
 
@@ -313,7 +318,7 @@ class ConvBlockII(nn.Module):
         # u^n
         # + dt * lambda * epsilon * Laplacian(u^n)
         # + dt * G_n(u^n, f)
-
+        
         u_half = (
             u
             + self.dt
@@ -327,7 +332,7 @@ class ConvBlockII(nn.Module):
         u_half = self.sig(u_half)
 
        
-        return u_half
+        return u_half, Guf
 
 
 # ---------------------------------------------------------
@@ -434,10 +439,10 @@ class DNIIParallel(nn.Module):
             padding_mode="circular"
         )
 
-    def forward(self, x):
-
+    def forward(self, x, return_diag=False):
         # input:
         # x.shape = (B, 2, H, W)
+
 
         f_n = x[:, 0:1, :, :]
         f_nn = x[:, 1:2, :, :]
@@ -455,40 +460,43 @@ class DNIIParallel(nn.Module):
         # nuclear
         u_n = self.layer1_n(f_n)
 
-        #u_n = self.sig(u_n)
-
-        
-        
+        u_n = self.sig(u_n)
 
         # nonnuclear
         u_nn = self.layer1_nn(f_nn)
 
-        #u_nn = self.sig(u_nn)
+        u_nn = self.sig(u_nn)
 
         q = torch.stack([u_n, u_nn], dim=0)
         q = triple_well(q, s=s, num_iter=5)
         u_n, u_nn = q[0], q[1]
 
-        # ---------------------------------------------
-        # Independent Model-II evolution
-        # ---------------------------------------------
+        g_outs_n = []
+        g_outs_nn = []
 
+        #iterations
         for idx in range(self.num_blocks):
-
-            u_n = self.blocks_n[idx](
+            
+            u_n, g_n = self.blocks_n[idx](
                 u_n,
                 f_n
             )
 
-            u_nn = self.blocks_nn[idx](
+            u_nn, g_nn = self.blocks_nn[idx](
                 u_nn,
                 f_nn
             )
+
+            g_outs_n.append(g_n)
+            g_outs_nn.append(g_nn)
+
             #above gives us $u^{n+1/2}$
             #calculate u^{n+1}
             q = torch.stack([u_n, u_nn], dim=0)
             q = triple_well(q, s=s, num_iter=5)
             u_n, u_nn = q[0], q[1]
+
+
 
         # ---------------------------------------------
         # Final logits
@@ -503,4 +511,16 @@ class DNIIParallel(nn.Module):
             dim=1
         )
 
-        return out
+        G_n_all = torch.stack(g_outs_n, dim=1)
+        G_nn_all = torch.stack(g_outs_nn, dim=1)
+
+        if return_diag:
+            diagnostics = {
+                "u_n": u_n,
+                "u_nn": u_nn,
+                "g_n": G_n_all,
+                "g_nn": G_nn_all,
+            }
+            return out, diagnostics
+
+        return out, G_n_all, G_nn_all
