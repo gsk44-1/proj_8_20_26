@@ -521,6 +521,6 @@ class DNIIParallel(nn.Module):
                 "g_n": G_n_all,
                 "g_nn": G_nn_all,
             }
-            return out, diagnostics
+            return out, G_n_all, G_nn_all, diagnostics
 
         return out, G_n_all, G_nn_all
