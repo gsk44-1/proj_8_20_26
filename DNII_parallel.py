@@ -6,10 +6,54 @@ import torchvision.transforms.functional as TF
 GROUPS = 8
 
 
-# ---------------------------------------------------------
-# Double-well fixed point iteration
-# ---------------------------------------------------------
+def triple_well(q0, s, num_iter=5):
+    q = q0.clone()
 
+    #trajectory = [q]
+
+    for _ in range(num_iter):
+        q = update_step(q, q0, s)
+        #trajectory.append(q)
+
+    return q
+
+#triple well?
+def update_step(q, q0, s):
+    
+    #q  = tensor([u^k, w^k])
+    #q0 = tensor([u^0, w^0])
+    
+    u, w = q[0], q[1]
+    u0, w0 = q0[0], q0[1]
+
+    num_u = u0 - s * (
+        6*u**2*(w - 1)
+        + 4*u**3
+        + 2*w**3
+        - 2*w**2
+    )
+
+    den_u = 1 + s * (
+        6*w**2 - 4*w + 2
+    )
+
+    num_w = w0 - s * (
+        6*w**2*(u - 1)
+        + 4*w**3
+        + 2*u**3
+        - 2*u**2
+    )
+
+    den_w = 1 + s * (
+        6*u**2 - 4*u + 2
+    )
+
+    u_new = num_u / den_u
+    w_new = num_w / den_w
+
+    return torch.stack([u_new, w_new])
+
+#doublewell
 def cubic_iter(x, s=1.0, num_iter=3):
     """
     Approximate implicit double-well step.
@@ -225,11 +269,11 @@ class ConvBlockII(nn.Module):
 
         # G_n(u, f)
         #
-        # u = one channel
+        # u = 1 channel
         # f = one channel
         # concatenated input = two channels
         self.G = UNET(
-            in_chan=2,
+            in_chan=2, #1 u and one f
             out_chan=1,
             features=features
         )
@@ -282,20 +326,8 @@ class ConvBlockII(nn.Module):
         # bounded activation before fixed-point solve
         u_half = self.sig(u_half)
 
-        # implicit double-well step
-        s = (
-            2.0
-            * self.dt
-            * self.lam
-            / self.ep
-        )
-
-        u_new = cubic_iter(
-            u_half,
-            s=s
-        )
-
-        return u_new
+       
+        return u_half
 
 
 # ---------------------------------------------------------
@@ -415,8 +447,7 @@ class DNIIParallel(nn.Module):
         # ---------------------------------------------
 
         s = (
-            2.0
-            * self.dt
+            self.dt
             * self.lam
             / self.ep
         )
@@ -424,22 +455,19 @@ class DNIIParallel(nn.Module):
         # nuclear
         u_n = self.layer1_n(f_n)
 
-        u_n = self.sig(u_n)
+        #u_n = self.sig(u_n)
 
-        u_n = cubic_iter(
-            u_n,
-            s=s
-        )
+        
+        
 
         # nonnuclear
         u_nn = self.layer1_nn(f_nn)
 
-        u_nn = self.sig(u_nn)
+        #u_nn = self.sig(u_nn)
 
-        u_nn = cubic_iter(
-            u_nn,
-            s=s
-        )
+        q = torch.stack([u_n, u_nn], dim=0)
+        q = triple_well(q, s=s, num_iter=5)
+        u_n, u_nn = q[0], q[1]
 
         # ---------------------------------------------
         # Independent Model-II evolution
@@ -456,6 +484,11 @@ class DNIIParallel(nn.Module):
                 u_nn,
                 f_nn
             )
+            #above gives us $u^{n+1/2}$
+            #calculate u^{n+1}
+            q = torch.stack([u_n, u_nn], dim=0)
+            q = triple_well(q, s=s, num_iter=5)
+            u_n, u_nn = q[0], q[1]
 
         # ---------------------------------------------
         # Final logits
