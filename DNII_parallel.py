@@ -461,16 +461,22 @@ class DNIIParallel(nn.Module):
         # nuclear
         u_n = self.layer1_n(f_n)
 
-        #u_n = self.sig(u_n)
+        u_n = self.sig(u_n)
 
         # nonnuclear
         u_nn = self.layer1_nn(f_nn)
 
-        #u_nn = self.sig(u_nn)
+        u_nn = self.sig(u_nn)
+        print(f"PRE TW: u_n min: {u_n.min()} u_n mean: {u_n.mean()} u_n max: {u_n.max()} u_n std: {u_n.std()}")
+        print(f"PRE TW: u_nn min: {u_nn.min()} u_n mean: {u_nn.mean()} u_n max: {u_nn.max()} u_n std: {u_nn.std()}")
 
         q = torch.stack([u_n, u_nn], dim=0)
         q = triple_well(q, s=s, num_iter=self.n_iter)
         u_n, u_nn = q[0], q[1]
+
+        print(f"POST TW: u_n min: {u_n.min()} u_n mean: {u_n.mean()} u_n max: {u_n.max()} u_n std: {u_n.std()}")
+        print(f"POST TW: u_nn min: {u_nn.min()} u_n mean: {u_nn.mean()} u_n max: {u_nn.max()} u_n std: {u_nn.std()}")
+
 
         g_outs_n = []
         g_outs_nn = []
