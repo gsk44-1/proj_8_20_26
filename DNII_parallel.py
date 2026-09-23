@@ -347,14 +347,15 @@ class DNIIParallel(nn.Module):
         num_blocks=1,
         dt=0.1,
         ep=0.2,
-        lam=1.0
+        lam=1.0,
+        n_iter=3
     ):
         super().__init__()
 
         self.dt = dt
         self.ep = ep
         self.lam = lam
-
+        self.n_iter = n_iter
         self.num_blocks = num_blocks
 
         self.sig = nn.Sigmoid()
@@ -468,7 +469,7 @@ class DNIIParallel(nn.Module):
         u_nn = self.sig(u_nn)
 
         q = torch.stack([u_n, u_nn], dim=0)
-        q = triple_well(q, s=s, num_iter=5)
+        q = triple_well(q, s=s, num_iter=self.n_iter)
         u_n, u_nn = q[0], q[1]
 
         g_outs_n = []
@@ -493,7 +494,7 @@ class DNIIParallel(nn.Module):
             #above gives us $u^{n+1/2}$
             #calculate u^{n+1}
             q = torch.stack([u_n, u_nn], dim=0)
-            q = triple_well(q, s=s, num_iter=5)
+            q = triple_well(q, s=s, num_iter=self.n_iter)
             u_n, u_nn = q[0], q[1]
 
 
