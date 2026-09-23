@@ -22,37 +22,52 @@ def triple_well(q0, s, num_iter=5):
 
     return q
 
-#triple well?
+# Potential:
+#   W(u,w) = u^2 w^2
+#          + u^2 (1-u-w)^2
+#          + w^2 (1-u-w)^2
+#          + u w (1-u-w)
 def update_step(q, q0, s):
     
-    #q  = tensor([u^k, w^k])
-    #q0 = tensor([u^0, w^0])
+    # q  = tensor([u^k, w^k])
+    # q0 = tensor([u^0, w^0])
     
     u, w = q[0], q[1]
     u0, w0 = q0[0], q0[1]
 
+    # dW/du =
+    #   4u^3 + 6u^2(w-1)
+    #   + (6w^2 - 6w + 2)u
+    #   + 2w^3 - 3w^2 + w
     num_u = u0 - s * (
         6*u**2*(w - 1)
         + 4*u**3
         + 2*w**3
-        - 2*w**2
+        - 3*w**2
+        + w
     )
 
     den_u = 1 + s * (
-        6*w**2 - 4*w + 2
+        6*w**2 - 6*w + 2
     )
 
+    # dW/dw =
+    #   4w^3 + 6w^2(u-1)
+    #   + (6u^2 - 6u + 2)w
+    #   + 2u^3 - 3u^2 + u
     num_w = w0 - s * (
         6*w**2*(u - 1)
         + 4*w**3
         + 2*u**3
-        - 2*u**2
+        - 3*u**2
+        + u
     )
 
     den_w = 1 + s * (
-        6*u**2 - 4*u + 2
+        6*u**2 - 6*u + 2
     )
 
+    # Simultaneous (Jacobi-style) update: both use the same old u,w.
     u_new = num_u / den_u
     w_new = num_w / den_w
 
