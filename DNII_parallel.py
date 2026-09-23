@@ -16,9 +16,18 @@ def triple_well(q0, s, num_iter=5):
 
     #trajectory = [q]
 
-    for _ in range(num_iter):
+    for k in range(num_iter):
         q = update_step(q, q0, s)
         #trajectory.append(q)
+        '''
+        print(
+            f"TW iter {k}: "
+            f"min={q.min().item():.4f}, "
+            f"mean={q.mean().item():.4f}, "
+            f"max={q.max().item():.4f}, "
+            f"finite={torch.isfinite(q).all().item()}"
+        )
+        '''
 
     return q
 
@@ -482,15 +491,15 @@ class DNIIParallel(nn.Module):
         u_nn = self.layer1_nn(f_nn)
 
         u_nn = self.sig(u_nn)
-        print(f"PRE TW: u_n min: {u_n.min()} u_n mean: {u_n.mean()} u_n max: {u_n.max()} u_n std: {u_n.std()}")
-        print(f"PRE TW: u_nn min: {u_nn.min()} u_n mean: {u_nn.mean()} u_n max: {u_nn.max()} u_n std: {u_nn.std()}")
+        #print(f"PRE TW: u_n min: {u_n.min()} u_n mean: {u_n.mean()} u_n max: {u_n.max()} u_n std: {u_n.std()}")
+        #print(f"PRE TW: u_nn min: {u_nn.min()} u_n mean: {u_nn.mean()} u_n max: {u_nn.max()} u_n std: {u_nn.std()}")
 
         q = torch.stack([u_n, u_nn], dim=0)
         q = triple_well(q, s=s, num_iter=self.n_iter)
         u_n, u_nn = q[0], q[1]
 
-        print(f"POST TW: u_n min: {u_n.min()} u_n mean: {u_n.mean()} u_n max: {u_n.max()} u_n std: {u_n.std()}")
-        print(f"POST TW: u_nn min: {u_nn.min()} u_n mean: {u_nn.mean()} u_n max: {u_nn.max()} u_n std: {u_nn.std()}")
+        #print(f"POST TW: u_n min: {u_n.min()} u_n mean: {u_n.mean()} u_n max: {u_n.max()} u_n std: {u_n.std()}")
+        #print(f"POST TW: u_nn min: {u_nn.min()} u_n mean: {u_nn.mean()} u_n max: {u_nn.max()} u_n std: {u_nn.std()}")
 
 
         g_outs_n = []
@@ -520,26 +529,60 @@ class DNIIParallel(nn.Module):
 
 
 
-        # ---------------------------------------------
-        # Final logits
-        # ---------------------------------------------
-
-        logit_n = self.final_n(u_n)
-
-        logit_nn = self.final_nn(u_nn)
-
-        out = torch.cat(
-            [logit_n, logit_nn],
-            dim=1
+  
+        '''
+        print(
+            "PHASE nuc:",
+            u_n.min().item(),
+            u_n.mean().item(),
+            u_n.max().item(),
+            u_n.std().item()
         )
 
+        print(
+            "LOGIT nuc:",
+            logit_n.min().item(),
+            logit_n.mean().item(),
+            logit_n.max().item(),
+            logit_n.std().item()
+        )
+
+        print(
+            "PROB nuc:",
+            torch.sigmoid(logit_n).min().item(),
+            torch.sigmoid(logit_n).mean().item(),
+            torch.sigmoid(logit_n).max().item(),
+            torch.sigmoid(logit_n).std().item()
+        )
+        '''
+        a = 5.0
+
+        logits_n = a * (u_n - 0.5)
+        logits_nn = a * (u_nn - 0.5)
+
+        out = torch.cat([logits_n, logits_nn], dim=1)
+        '''
+        print(
+            "FINAL PHASE nuc min/mean/max:",
+            logits_n.min().item(),
+            logits_n.mean().item(),
+            logits_n.max().item()
+        )
+
+        print(
+            "FINAL PHASE nonnuc min/mean/max:",
+            logits_nn.min().item(),
+            logits_nn.mean().item(),
+            logits_nn.max().item()
+        )
+        '''
         G_n_all = torch.stack(g_outs_n, dim=1)
         G_nn_all = torch.stack(g_outs_nn, dim=1)
 
         if return_diag:
             diagnostics = {
-                "u_n": u_n,
-                "u_nn": u_nn,
+                "u_n": logits_n,
+                "u_nn": logits_nn,
                 "g_n": G_n_all,
                 "g_nn": G_nn_all,
             }
