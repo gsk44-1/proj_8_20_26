@@ -329,7 +329,7 @@ class ConvBlockII(nn.Module):
         )
 
         # bounded activation before fixed-point solve
-        u_half = self.sig(u_half)
+        #u_half = self.sig(u_half)
 
        
         return u_half, Guf
@@ -461,12 +461,12 @@ class DNIIParallel(nn.Module):
         # nuclear
         u_n = self.layer1_n(f_n)
 
-        u_n = self.sig(u_n)
+        #u_n = self.sig(u_n)
 
         # nonnuclear
         u_nn = self.layer1_nn(f_nn)
 
-        u_nn = self.sig(u_nn)
+        #u_nn = self.sig(u_nn)
 
         q = torch.stack([u_n, u_nn], dim=0)
         q = triple_well(q, s=s, num_iter=self.n_iter)
