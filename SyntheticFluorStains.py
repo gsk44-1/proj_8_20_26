@@ -639,45 +639,40 @@ class SyntheticFluorStains(Dataset):
 
         return out
 
-    def _generate_conc(self, dist, labels, bdry, nonnuc, rng):
+    def _generate_conc(self, dist, labels, rng):
+        (z_slices, H, W) = labels.shape
+        boundary = np.zeros_like(labels, dtype=bool)
+
+
+        for z in range(labels.shape[0]):
+            boundary[z] = find_boundaries(
+                labels[z],
+                mode="inner"
+            )
+        
+        nuc_conc = self._gen_nuc_conc(labels,dist, rng)
+        nonnuc_conc = self._gen_nonnuc_conc(labels, boundary, rng)
+        return nuc_conc, nonnuc_conc
+    
+    def _gen_nuc_conc(self, labels, dist, rng):
+        #nuclear concentration
         local_sz = 15  # neighborhood width
-        z_slices = self.z_slices
-        N = self.N
-        vol_shape = (z_slices, N, N)
+        vol_shape = labels.shape
 
-        dist[dist == 0] = dist.max()
-        dist = dist.max() - dist
+        dist = np.nan_to_num(dist, nan=0, posinf=0, neginf=0)
         dist /= dist.max()
-        ring = dist**rng.integers(3, 8)
 
-        local_ringmin = minimum_filter(ring, size=local_sz)
-        local_ringmax = maximum_filter(ring, size=local_sz)
+        local_ringmin = minimum_filter(dist, size=local_sz)
+        local_ringmax = maximum_filter(dist, size=local_sz)
 
-        ring_normal = (ring - local_ringmin) / (local_ringmax - local_ringmin + 1e-8)
+        ring_normal = (dist - local_ringmin) / (local_ringmax - local_ringmin + 1e-8)
 
-        bands = np.array([[1, 100], [4, 50], [1, 20], [0.3, 10], [0.1, 5]])
-        ring_normal *= self._spectral_noise(vol_shape, bands, 0.5, 0.5, 2, rng)
+        ring = ring_normal**rng.integers(2, 5)
 
-        prenoise_conc = np.float32(dist!=0) + (ring_normal)
-
-        cell_bin = (labels!=0)
-        dist_m = dist_t(~(cell_bin))
-        dist_m[dist_m == 0] = dist_m.max()
-        dist_m = dist_m.max() - dist_m
-        dist_m /= dist_m.max()
-        ring_m = dist_m**rng.integers(3, 8) + bdry
-
-        ring_fg = dist_t((nonnuc + cell_bin)!=0)
-        ring_fg[ring_fg == 0] = ring_fg.max()
-        ring_fg = ring_fg.max() - ring_fg
-        ring_fg /= ring_fg.max()
-        ring_fg = ring_fg**rng.integers(2, 4)
-
-
-        prenoise_conc_nonnuc = rng.uniform(0.15, 0.5)*(cell_bin+nonnuc) + (2*ring_m) + (ring_fg)
+        prenoise_conc = np.float32(dist!=0) + (rng.uniform(3, 6)*ring)
 
         #assigning noise to different regions
-        big_noise_shape = (round(z_slices*1.5), round(N*1.5), round(N*1.5))
+        big_noise_shape = (round(self.z_slices*1.5), round(self.N*1.5), round(self.N*1.5))
 
         bands = np.array([[25, 100], [15, 50], [8, 25], [10, 17], [12, 14], [7, 8], [3, 5], [0.8, 3], [0.6, 1]])
         noise_map = self._spectral_noise(big_noise_shape, bands, 0.3, 0, 1., rng)
@@ -690,19 +685,42 @@ class SyntheticFluorStains(Dataset):
         objs = find_objects(labels)
         objs = [obj for obj in objs if obj is not None] #needed because sometimes there is a None in the list because obj couldn't be found.
         conc = self._assign_noise_to_labels(noise_map, objs, labels, rng)
-        
-        conc_nonnuc = prenoise_conc_nonnuc*noise_map[:z_slices, :N, :N]
-        
-        conc *= prenoise_conc
+        conc = prenoise_conc*conc
+
 
         conc = (conc - conc.min()) / (conc.max() - conc.min() + 1e-8)
-        conc_nonnuc = (conc_nonnuc - conc_nonnuc.min()) / (conc_nonnuc.max() - conc_nonnuc.min() + 1e-8)
-      
-        #output should be [0, 1]
-        if np.isnan(conc).any() or (conc < 0).any():
-            print("Array has NaNs or negative values")
-          
-        return conc, conc_nonnuc
+        #conc_nonnuc = (conc_nonnuc - conc_nonnuc.min()) / (conc_nonnuc.max() - conc_nonnuc.min() + 1e-8)
+        return conc
+
+    def _gen_nonnuc_conc(self, labels, bdry, rng):
+        #nonnuclear concentration
+        vol_shape = labels.shape
+
+        bands1 = np.array([[1, 100], [1, 50], [1, 20], [0.05, 10]])
+        bands2 = np.array([[1, 100], [1, 50], [0.05, 20]])
+
+        noise1 = self._spectral_noise(vol_shape, bands1, 1, 0, 2, rng)
+
+        interior = np.zeros(vol_shape, dtype=np.bool)
+        thresh = rng.integers(4, 15)
+        for z in range(vol_shape[0]):
+            interior[z] = dist_t(~bdry[z])*noise1[z] < thresh
+
+        #interior = (interior - np.min(interior))/(np.max(interior) - np.min(interior) + 1e-4)
+
+        cell_interiors = (labels != 0) ^ bdry
+        nonnuc = interior & (~cell_interiors)
+
+        noise2 = self._spectral_noise(vol_shape, bands2, 2, 0.4, 1.5, rng)
+        #thicker boundaries
+        rings = dist_t(~nonnuc)
+        rings = (rings.max() - rings)/(rings.max() - rings.min() + 1e-4)
+        rings *= cell_interiors + nonnuc
+        rings *= noise2
+        rings = rings**rng.integers(2, 4)
+
+        conc_nonnuc = (rings - rings.min()) / (rings.max() - rings.min() + 1e-8)
+        return conc_nonnuc
 
     def _processing(self, conc, conc_nonnuc, rng):
         num_iter_rl = rng.integers(1, 7)
@@ -727,13 +745,6 @@ class SyntheticFluorStains(Dataset):
 
         photons = rng.uniform(100, 5500)
         photons_nonnuc = rng.uniform(100, 5500)
-        '''
-        print("blurred min:", blurred.min())
-        print("blurred max:", blurred.max())
-        print("blurred mean:", blurred.mean())
-        print("finite:", np.isfinite(blurred).all())
-        print("photons:", photons)
-        '''
 
         bg_noise_lvl = rng.uniform(0, 0.2)
         bands = np.array([[5, 140], [0.05, 30], [0.01, 15], [0.005, 7]])
