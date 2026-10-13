@@ -403,7 +403,7 @@ class SyntheticFluorStains(Dataset):
                 mode="inner"
             )
         
-        nuc_conc = self._gen_nuc_conc(labels, dist, rng)
+        nuc_conc = self._gen_nuc_conc(labels, dist, boundary, rng)
         nonnuc_conc = self._gen_nonnuc_conc(labels, boundary, rng)
         return nuc_conc, nonnuc_conc
 
@@ -543,7 +543,7 @@ class SyntheticFluorStains(Dataset):
 
         return labels, dist
 
-    def _gen_nuc_conc(self, labels, dist, rng):
+    def _gen_nuc_conc(self, labels, dist, boundary, rng):
         #nuclear concentration
         local_sz = 15  # neighborhood width
         vol_shape = labels.shape
@@ -556,9 +556,12 @@ class SyntheticFluorStains(Dataset):
 
         ring_normal = (dist - local_ringmin) / (local_ringmax - local_ringmin + 1e-8)
 
-        ring = ring_normal**rng.integers(2, 5)
+        ring = ring_normal**rng.integers(2, 6)
 
-        prenoise_conc = np.float32(dist!=0) + (rng.uniform(3, 6)*ring)
+        prenoise_conc = np.float32(dist!=0) + (rng.uniform(0.8, 1.5)*ring)
+        degraded_bdry = boundary * self._spectral_noise(vol_shape, np.array([[3, 100], [1, 50], [0.2, 25]]), 0.7, 0, 1., rng)
+        
+        prenoise_conc = prenoise_conc * (1 - degraded_bdry)
 
         #assigning noise to different regions
         big_noise_shape = (round(self.z_slices*1.5), round(self.N*1.5), round(self.N*1.5))
@@ -570,6 +573,7 @@ class SyntheticFluorStains(Dataset):
         mod_noise = self._spectral_noise(big_noise_shape, bands, 0.4, 0.1, 1., rng)
 
         noise_map *= mod_noise
+      
 
         objs = find_objects(labels)
         objs = [obj for obj in objs if obj is not None] #needed because sometimes there is a None in the list because obj couldn't be found.
@@ -578,10 +582,12 @@ class SyntheticFluorStains(Dataset):
 
 
         conc = (conc - conc.min()) / (conc.max() - conc.min() + 1e-8)
+        conc = conc**rng.integers(1, 4)
         #conc_nonnuc = (conc_nonnuc - conc_nonnuc.min()) / (conc_nonnuc.max() - conc_nonnuc.min() + 1e-8)
         return conc
 
     def _gen_nonnuc_conc(self, labels, bdry, rng):
+        print("nonnuc")
         #nonnuclear concentration
         vol_shape = labels.shape
 
@@ -604,6 +610,13 @@ class SyntheticFluorStains(Dataset):
         #thicker boundaries
         rings = dist_t(~nonnuc)
         rings = (rings.max() - rings)/(rings.max() - rings.min() + 1e-4)
+        
+        local_sz = 25
+        local_ringmin = minimum_filter(rings, size=local_sz)
+        local_ringmax = maximum_filter(rings, size=local_sz)
+
+        rings = (rings - local_ringmin) / (local_ringmax - local_ringmin + 1e-8)
+
         rings *= cell_interiors + nonnuc
         rings *= noise2
         rings = rings**rng.integers(2, 4)
@@ -611,7 +624,7 @@ class SyntheticFluorStains(Dataset):
         conc_nonnuc = (rings - rings.min()) / (rings.max() - rings.min() + 1e-8)
         return conc_nonnuc
 
-    def _processing(self, conc, conc_nonnuc, rng):
+    def _processing(self, conc_n, conc_nonnuc, rng):
         num_iter_rl = rng.integers(1, 7)
         na1 = rng.uniform(0.6, 0.95)
         na2 = rng.uniform(0.6, 0.95)
@@ -625,8 +638,8 @@ class SyntheticFluorStains(Dataset):
                                                     ns=1.40, tg=0, tg0=0))
         psf /= psf.sum()
 
-        blurred = fftconvolve(conc, psf, mode="same")
-        blurred = np.clip(blurred, 0, None)
+        blurred_n = fftconvolve(conc_n, psf, mode="same")
+        blurred_n = np.clip(blurred_n, 0, None)
 
         blurred_nonnuc = fftconvolve(conc_nonnuc, psf, mode="same")
         blurred_nonnuc = np.clip(conc_nonnuc, 0, None)
@@ -635,18 +648,18 @@ class SyntheticFluorStains(Dataset):
         photons = rng.uniform(100, 5500)
         photons_nonnuc = rng.uniform(100, 5500)
 
-        bg_noise_lvl = rng.uniform(0, 0.2)
+        bg_noise_lvl = rng.uniform(0, 0.1)
         bands = np.array([[5, 140], [0.05, 30], [0.01, 15], [0.005, 7]])
-        backg = self._spectral_noise(conc.shape, bands, 0.7, 0, bg_noise_lvl, rng)
-        blurred += backg
+        backg_n = self._spectral_noise(conc_n.shape, bands, 0.7, 0, bg_noise_lvl, rng)
+        blurred_n += backg_n
+     
+        backg_nn = self._spectral_noise(conc_n.shape, bands, 0.7, 0, bg_noise_lvl, rng)
+        blurred_nonnuc += backg_nn
 
-        backg_nn = self._spectral_noise(conc.shape, bands, 0.7, 0, 1, rng)
-        blurred_nonnuc *= backg_nn
-
-        lam = blurred * photons
+        lam_n = blurred_n * photons
         lam_nn = blurred_nonnuc * photons_nonnuc
-        #print("lambda max:", lam.max())
-        noisy = rng.poisson(blurred * photons) / photons
+
+        noisy_n = rng.poisson(blurred_n * photons) / photons
         noisy_nn = rng.poisson(blurred_nonnuc * photons_nonnuc) / photons_nonnuc
         #different psf
         psf = psfm.vectorial_psf_centered(nz=5, dz=0.2, nx=25, dxy=0.1125,
@@ -656,8 +669,8 @@ class SyntheticFluorStains(Dataset):
         psf /= psf.sum()
 
 
-        recovered = richardson_lucy(
-            noisy,
+        recovered_n = richardson_lucy(
+            noisy_n,
             psf,
             num_iter=num_iter_rl,
             clip=False
@@ -670,23 +683,21 @@ class SyntheticFluorStains(Dataset):
         )
 
         #normalize
-        scale = np.percentile(recovered, 99.9)
-        recovered = np.clip(recovered / max(scale, 1e-8), 0, 1)
+        scale = np.percentile(recovered_n, 99.9)
+        recovered = np.clip(recovered_n / max(scale, 1e-8), 0, 1)
 
         scale_nn = np.percentile(recovered_nn, 99.9)
         recovered_nn = np.clip(recovered_nn / max(scale_nn, 1e-8), 0, 1)
 
-
-        altered_img = self._random_bezier_transform(recovered, rng)
-        altered_img = self._contrast(altered_img, rng)
-        altered_img = self._brightness_scale(altered_img, rng)
+        altered_img_n = self._random_bezier_transform(recovered_n, rng)
+        altered_img_n = self._contrast(altered_img_n, rng)
+        altered_img_n = self._brightness_scale(altered_img_n, rng)
         
         altered_img_nn = self._random_bezier_transform(recovered_nn, rng)
         altered_img_nn = self._contrast(altered_img_nn, rng)
         altered_img_nn = self._brightness_scale(altered_img_nn, rng)
 
-        
-        return altered_img, altered_img_nn
+        return altered_img_n, altered_img_nn
 
     def _random_bezier_transform(self, image, rng=None):
         if rng is None:
