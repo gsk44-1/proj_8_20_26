@@ -639,7 +639,7 @@ class SyntheticFluorStains(Dataset):
 
         return out
 
-    def _generate_conc(self, dist, labels, rng):
+    def _generate_conc(self, dist, labels, bdry, nonnuc_a, rng):
         (z_slices, H, W) = labels.shape
         boundary = np.zeros_like(labels, dtype=bool)
 
