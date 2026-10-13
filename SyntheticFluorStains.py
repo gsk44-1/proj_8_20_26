@@ -409,7 +409,7 @@ class SyntheticFluorStains(Dataset):
 
     @staticmethod
     @njit(cache=True)
-    def anisotropic_geodesic_voronoi_numba(
+    def _anisotropic_geodesic_voronoi_numba(
         mask,
         seeds,
         ratios,
