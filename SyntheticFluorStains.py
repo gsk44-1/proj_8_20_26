@@ -321,7 +321,7 @@ class SyntheticFluorStains(Dataset):
 
         noise_theta = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., -0.1, 0.1, rng)
         noise_ratio = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., 0.6, 1.1, rng) #ratio movement should be biased negative?
-        R = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., 2,15, rng)
+        R = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., 5,15, rng)
 
 
 
@@ -558,7 +558,7 @@ class SyntheticFluorStains(Dataset):
 
         ring = ring_normal**rng.integers(2, 6)
 
-        prenoise_conc = np.float32(dist!=0) + (rng.uniform(0.8, 2)*ring)
+        prenoise_conc = np.float32(dist!=0) + (rng.uniform(0.8, 3)*ring)
         degraded_bdry = boundary * self._spectral_noise(vol_shape, np.array([[3, 100], [1, 50], [0.2, 25]]), 0.7, 0, 1., rng)
         
         prenoise_conc = prenoise_conc * (1 - degraded_bdry)
