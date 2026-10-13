@@ -42,22 +42,23 @@ class SyntheticFluorStains(Dataset):
     def __getitem__(self, idx):
         rng = np.random.default_rng(self.seed + idx)
 
-        labels, markers, bdry, dist, nonnuc = self._generate_cell_tiles(rng)
+        labels, nuc_labels, nonnuc_labels, dist_labels_bin_r = self._generate_cell_tiles(rng)
 
         #concentration
-        conc, conc_nonnuc = self._generate_conc(dist.copy(), labels, bdry.copy(), nonnuc.copy(), rng)
+        conc, conc_nonnuc = self._generate_conc(dist_labels_bin_r.copy(), labels, rng)
 
         out_vol, out_nonnuc_vol = self._processing(conc, conc_nonnuc, rng)
         data = np.stack([out_vol, out_nonnuc_vol], axis=1)
 
-        structure = disk(5)
 
-        for j in range(self.z_slices):
-          nonnuc[j] = nonnuc[j] & ~binary_erosion(nonnuc[j], structure=structure)
+        #structure = disk(5)
 
-        labels = np.stack([markers, nonnuc], axis=1)
+        #for j in range(self.z_slices):
+        #  nonnuc[j] = nonnuc[j] & ~binary_erosion(nonnuc[j], structure=structure)
+
+        labels = np.stack([nuc_labels, nonnuc_labels], axis=1)
         #print(f" marker shape {markers.shape}")
-        return data, labels #(dist/dist.max())
+        return data, labels
 
 
 
@@ -86,244 +87,98 @@ class SyntheticFluorStains(Dataset):
 
         return out
 
-    def _sample_fg_pts_density(self, mask, n, density, rng):
-
-        coords = np.argwhere(mask)
-
-        weights = density[mask].astype(float)
-        weights /= weights.sum()
-
-        idx = rng.choice(
-            len(coords),
-            size=n,
-            replace=False,
-            p=weights
-        )
-
-        return coords[idx]
-
     @staticmethod
     @njit(cache=True)
-    def _anisotropic_geodesic_voronoi_numba(
-        mask,
-        seeds,
-        theta,
-        ratio,
-        scale,
-        z_ratio,
-        R=None
-    ):
+    def _voronoi_numba(mask, seeds, max_radius=np.inf):
+
+
         Z, H, W = mask.shape
-        if R is None:
-            R = np.full((Z, H, W), np.inf)
+        n_seeds = seeds.shape[0]
 
-        dist = np.full((Z, H, W), np.inf)
         labels = np.zeros((Z, H, W), dtype=np.int32)
+        dist = np.full((Z, H, W), np.inf, dtype=np.float64)
 
+        R2 = max_radius * max_radius
 
-        #metric tensor
-        a11 = np.empty((Z, H, W), dtype=np.float64)
-        a12 = np.empty((Z, H, W), dtype=np.float64)
-        a22 = np.empty((Z, H, W), dtype=np.float64)
-        a33 = np.empty((Z, H, W), dtype=np.float64)#
-        #other entries are zero
+        for z in range(Z):
+            for y in range(H):
+                for x in range(W):
 
-        for y in range(H):
-            for x in range(W):
+                    if not mask[z, y, x]:
+                        continue
 
-                c = math.cos(theta[0, y, x]) #this assumes for now that the theta and ratio fields are the same for all z slices
-                s = math.sin(theta[0, y, x])
+                    best_dist2 = np.inf
+                    best_label = 0
 
-                r = ratio[0, y, x]
-                q = 1.0 / (r * r)
+                    for i in range(n_seeds):
 
-                a11[0, y, x] = q * c * c + s * s #A = R(theta)(1/r^2 0 \\ 0 1)R(theta)
-                a22[0, y, x] = q * s * s + c * c
-                a12[0, y, x] = (q - 1.0) * c * s
-                a33[0, y, x] = z_ratio**2
+                        dz = z - seeds[i, 0]
+                        dy = y - seeds[i, 1]
+                        dx = x - seeds[i, 2]
 
-        #copy 0 level of grids to all z levels
-        for i in range(Z):
-            a11[i, :, :] = a11[0, :, :]
-            a22[i, :, :] = a22[0, :, :]
-            a12[i, :, :] = a12[0, :, :]
-            a33[i, :, :] = a33[0, :, :]
+                        d2 = dz * dz + dy * dy + dx * dx
 
-        # Each heap item:
-        # (distance, z, y, x, seed_label)
+                        if d2 < best_dist2:
+                            best_dist2 = d2
+                            best_label = i + 1
 
-        # Numba needs the heap's element type to be inferable
-        heap = [(0.0, 0, 0, 0, 0)]
-        heapq.heappop(heap)
-
-        # Initialize every seed
-        for i in range(seeds.shape[0]):
-
-            z = seeds[i, 0]
-            y = seeds[i, 1]
-            x = seeds[i, 2]
-
-            if (
-                y >= 0 and y < H
-                and x >= 0 and x < W
-                and z >= 0 and z < Z
-                and mask[z, y, x]
-            ):
-                label_id = i + 1
-
-                dist[z, y, x] = 0.0
-                labels[z, y, x] = label_id
-
-                heapq.heappush(
-                    heap,
-                    (0.0, z, y, x, label_id)
-                )
-
-        # 26 cell neighborhood
-        dys = (-1, 1, 0, 0, -1, -1, 1, 1, -1, 1, 0, 0, -1, -1, 1, 1, -1, 1, 0, 0, -1, -1, 1, 1, 0, 0)
-        dxs = (0, 0, -1, 1, -1, 1, -1, 1, 0, 0, -1, 1, -1, 1, -1, 1, 0, 0, -1, 1, -1, 1, -1, 1, 0, 0)
-        dzs = (0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, 1, -1)
-
-
-        while len(heap) > 0:
-
-            current_dist, z, y, x, label_id = heapq.heappop(heap)
-
-            # Ignore stale heap entry
-            if current_dist > dist[z, y, x]:
-                continue
-
-            # Important if another seed reached this pixel first
-            if labels[z, y, x] != label_id:
-                continue
-
-            for k in range(26):
-                dz = dzs[k]
-                dy = dys[k]
-                dx = dxs[k]
-
-                zz = z + dz
-                yy = y + dy
-                xx = x + dx
-
-                if (
-                    yy < 0 or yy >= H
-                    or xx < 0 or xx >= W
-                    or zz < 0 or zz >= Z
-                    or not mask[zz, yy, xx]
-                ):
-                    continue
-
-                # Average metric tensor across edge
-                
-                A11 = 0.5 * (
-                    a11[z, y, x] + a11[zz, yy, xx]
-                )
-
-                A22 = 0.5 * (
-                    a22[z, y, x] + a22[zz, yy, xx]
-                )
-
-                A12 = 0.5 * (
-                    a12[z, y, x] + a12[zz, yy, xx]
-                )
-
-                A33 = 0.5 * (
-                    a33[z, y, x] + a33[zz, yy, xx]
-                )
-
-                avg_scale = 0.5 * (scale[z,y,x] + scale[zz,yy,xx])
-                #test - 
-                '''
-                A11 = a11[z, y, x]
-                A22 = a22[z, y, x]
-                A12 = a12[z, y, x]
-                A33 = a33[z, y, x]
-                '''
-
-                step_cost = math.sqrt(
-                    A11 * dx * dx
-                    + 2.0 * A12 * dx * dy
-                    + A22 * dy * dy
-                    + A33 * dz * dz
-                ) * avg_scale
-
-                if not math.isfinite(step_cost):
-                    print("bad step_cost:", step_cost)
-                    print("A11,A12,A22,A33:", A11, A12, A22, A33)
-                    print("dx,dy,dz:", dx, dy, dz)
-
-                new_dist = current_dist + step_cost
-
-                if (new_dist < dist[zz, yy, xx]) and (new_dist < R[zz, yy, xx]):
-
-                    dist[zz, yy, xx] = new_dist
-                    labels[zz, yy, xx] = label_id
-
-                    heapq.heappush(
-                        heap,
-                        (new_dist, zz, yy, xx, label_id)
-                    )
+                    if best_dist2 <= R2:
+                        labels[z, y, x] = best_label
+                        dist[z, y, x] = np.sqrt(best_dist2)
 
         return labels, dist
 
     @staticmethod
     @njit(cache=True)
-    def _weighted_centroids(labels, density, n_seeds):
+    def _centroids_from_labels(labels, n_seeds):
 
         Z, H, W = labels.shape
+
+        centroids = np.zeros((n_seeds, 3), dtype=np.int64)
+        counts = np.zeros(n_seeds, dtype=np.int64)
 
         sum_z = np.zeros(n_seeds, dtype=np.float64)
         sum_y = np.zeros(n_seeds, dtype=np.float64)
         sum_x = np.zeros(n_seeds, dtype=np.float64)
-        sum_w = np.zeros(n_seeds, dtype=np.float64)
+
         for z in range(Z):
             for y in range(H):
                 for x in range(W):
 
                     label = labels[z, y, x]
 
-                    if label == 0:
+                    if label <= 0 or label > n_seeds:
                         continue
 
                     i = label - 1
-                    w = density[z, y, x]
 
-                    sum_z[i] += w * z
-                    sum_y[i] += w * y
-                    sum_x[i] += w * x
-                    sum_w[i] += w
-
-        centroids = np.zeros((n_seeds, 3), dtype=np.float64)
+                    sum_z[i] += z
+                    sum_y[i] += y
+                    sum_x[i] += x
+                    counts[i] += 1
 
         for i in range(n_seeds):
+            if counts[i] > 0:
+                centroids[i, 0] = int(round(sum_z[i] / counts[i]))
+                centroids[i, 1] = int(round(sum_y[i] / counts[i]))
+                centroids[i, 2] = int(round(sum_x[i] / counts[i]))
 
-            if sum_w[i] > 0:
-                centroids[i, 0] = sum_z[i] / sum_w[i]
-                centroids[i, 1] = sum_y[i] / sum_w[i]
-                centroids[i, 2] = sum_x[i] / sum_w[i]
-
-        return centroids, sum_w
+        return centroids, counts
 
     @staticmethod
     @njit(cache=True)
-    def _lloyd_update(
-        seeds,
-        centroids,
-        weights,
-        alpha
-    ):
+    def _lloyd_update(seeds, centroids, counts, alpha):
+
         new_seeds = seeds.copy()
 
         for i in range(seeds.shape[0]):
-
-            # Seed received a nonempty Voronoi region
-            if weights[i] > 0:
+            if counts[i] > 0:
                 for d in range(seeds.shape[1]):
-                    new_seeds[i, d] = (
+
+                    new_seeds[i, d] = int(round(
                         (1.0 - alpha) * seeds[i, d]
                         + alpha * centroids[i, d]
-                    )
+                    ))
 
         return new_seeds
 
@@ -336,7 +191,7 @@ class SyntheticFluorStains(Dataset):
         nearest_y,
         nearest_x
     ):
-        Z, H, W = mask.shape
+        z_slices, N, _ = mask.shape
 
         out = seeds.copy()
 
@@ -345,9 +200,9 @@ class SyntheticFluorStains(Dataset):
             y = int(round(seeds[i, 1]))
             x = int(round(seeds[i, 2]))
 
-            z = max(0, min(Z - 1, z))
-            y = max(0, min(H - 1, y))
-            x = max(0, min(W - 1, x))
+            z = max(0, min(z_slices - 1, z))
+            y = max(0, min(N - 1, y))
+            x = max(0, min(N - 1, x))
 
             if mask[z, y, x]:
                 out[i, 0] = z
@@ -366,38 +221,22 @@ class SyntheticFluorStains(Dataset):
         self,
         mask,
         seeds,
-        theta,
-        ratio,
-        scale,
-        z_ratio,
-        density=None,
-        n_iter=3,
+        ratios,
+        thetas,
+        noise_theta,
+        noise_ratio,
+        n_iter=10,
         alpha=0.4,
         R=None,
         rng=np.random.default_rng()
     ):
+        z_slices, N, N = mask.shape
+
         if R is None:
             R = np.full(mask.shape, np.inf)
 
-        mask = np.asarray(mask, dtype=np.bool_)
-        theta = np.asarray(theta, dtype=np.float64)
-        ratio = np.asarray(ratio, dtype=np.float64)
+        seeds = np.asarray(seeds, dtype=np.int64).copy()
 
-        seeds = np.asarray(
-            seeds,
-            dtype=np.float64
-        ).copy()
-
-        if density is None:
-            density = np.ones(
-                mask.shape,
-                dtype=np.float64
-            )
-        else:
-            density = np.asarray(
-                density,
-                dtype=np.float64
-            )
 
         # Precompute closest foreground pixel
         _, nearest = dist_t(
@@ -411,30 +250,20 @@ class SyntheticFluorStains(Dataset):
 
         for _ in range(n_iter):
 
-            seed_pixels = np.rint(
-                seeds
-            ).astype(np.int64)
-
-            labels, dist = self._anisotropic_geodesic_voronoi_numba(
+            labels, dist = self._voronoi_numba(
                 mask,
-                seed_pixels,
-                theta,
-                ratio,
-                scale,
-                z_ratio,
-                R
+                seeds
             )
 
-            centroids, weights = self._weighted_centroids(
+            centroids, counts = self._centroids_from_labels(
                 labels,
-                density,
                 len(seeds)
             )
 
             seeds = self._lloyd_update(
                 seeds,
                 centroids,
-                weights,
+                counts,
                 alpha
             )
 
@@ -446,52 +275,33 @@ class SyntheticFluorStains(Dataset):
                 nearest_x
             )
 
-        seeds0_scaled = seeds.astype(float).copy()
-        seeds0_scaled[:, 0] *= z_ratio
 
-        #calculate R map
-        tree = cKDTree(seeds0_scaled)
-
-        dists, ind = tree.query(seeds0_scaled, k=2)
-
-        dists_others = dists[:, 1:].mean(axis=1)
-
-        zz, yy, xx = np.mgrid[:self.z_slices, :self.N, :self.N]
-
-        locs = np.column_stack((
-            (z_ratio * zz).ravel(),
-            yy.ravel(),
-            xx.ravel()
-        ))
-
-        _, nearest_seed = tree.query(locs, k=1)
-
-        
-        spacing_map = dists_others[nearest_seed].reshape(self.z_slices, self.N, self.N)
-        spacing_map = np.minimum(spacing_map, 15)
-        
-        bands = np.array([[4, 100], [2, 50], [1, 25]])
-        siz_factor = self._spectral_noise(mask.shape, np.array([[5, 140], [0.5, 30], [0.1, 15], [0.05, 7]]), 0.7, 0.3, 1, rng)
-        R = siz_factor*gaussian_filter(spacing_map, sigma=(0, 10, 10)) + self._spectral_noise(mask.shape, bands, 0.7, 0, 5, rng)
-
-        # Final tessellation
-        seed_pixels = np.rint(
-            seeds
-        ).astype(np.int64)
-
+        #final tiling
         labels, dist = self._anisotropic_geodesic_voronoi_numba(
-            np.full((self.z_slices, self.N, self.N), 1),
-            seed_pixels,
-            theta,
-            ratio,
-            scale,
-            z_ratio,
+            np.full((z_slices, N, N), 1),
+            seeds,
+            ratios,
+            thetas,
+            noise_theta,
+            noise_ratio,
             R#\max cell radius
         )
 
-        return seed_pixels, labels, dist
+        return seeds, labels, dist
+
+    def _sample_fg_pts_density(self, mask, n, rng):
+
+        coords = np.argwhere(mask)
 
 
+        idx = rng.choice(
+            len(coords),
+            size=n,
+            replace=False
+        )
+
+        return coords[idx]
+    
     def _generate_cell_tiles(self, rng):
         N = self.N
         z_slices = self.z_slices
@@ -499,80 +309,25 @@ class SyntheticFluorStains(Dataset):
         n_seeds = rng.integers(round(self.n_seeds*0.6), round(self.n_seeds*2))
 
 
-
-        coarse = rng.random((N//42, N//42))
-
-        zoom_tup = (N/coarse.shape[0] + 1, N/coarse.shape[1] + 1)
-
-        bands_surf = np.array([[5, 100],[1, 50], [0.5, 25], [0.25, 11], [0.1, 5]]) #bands for coarse noise
-        
-        # enlarge to roughly N x N
-        surf = zoom(coarse, zoom=zoom_tup, order=3)
-        surf = surf[:N, :N] 
-
-        surf = (surf - surf.mean())/((np.abs(surf - surf.mean())).max())
-        surf += self._spectral_noise((1, N, N), bands_surf, 0.8, -0.8, 0.8)[0]
-        fg = (surf > -0.3)*(surf < 0.5)
-
-        gy, gx = np.gradient(surf)
-        
-        
-        #theta = np.arctan2(gy, gx)
-        #theta = np.repeat(theta[None, :, :], z_slices, axis=0)
-        bands_theta = np.array([[5, 140], [0.1, 30]])
-        theta = (self._spectral_noise((z_slices, N, N), bands_theta, 0.7, -np.pi/2, np.pi/2) )
-        
-        
-        dist_fg = dist_t(fg)
-        density2 = np.ones((N, N))#(dist_fg + 1)
-
-        #make 3d
-        fg = np.repeat(fg[None, :, :], z_slices, axis=0)
-        density2 = np.repeat(density2[None, :, :], z_slices, axis=0)
+        surf = self._spectral_noise((z_slices, N, N), np.array([[5, 150], [0.5, 50]]), 0.9, -1, 1, rng)
+        surf = (surf > -0.3)*(surf < 0.3)
+        surf = surf.astype(np.bool)
 
 
-        
-        #x_pts = np.array([0, rng.integers(1, 8), rng.integers(8, 16), 20])
-        #y_pts = np.array([rng.integers(1, 4), rng.integers(2, 6), rng.integers(2, 6), rng.integers(1, 2)])
+        seeds = self._sample_fg_pts_density(surf, n_seeds, rng)
+        ratios = rng.uniform(0.2, 20, size=(n_seeds))
+        thetas = rng.uniform(-np.pi/2, np.pi/2, size=(n_seeds))
+        #now these are just lists of values for each seed
 
-        #f = PchipInterpolator(x_pts, y_pts)
-        #ratio = f(np.clip(dist_fg, 0, 20))
-
-        #ratio = np.repeat(ratio[None, :, :], z_slices, axis=0)*self._spectral_noise((z_slices, N, N), bands=np.array([[5,100],[3,50],[1, 24]]), bdwidth=0.3, lo=0.8, hi=1.5, rng=rng)
-        bands_ratio = np.array([[5, 100],[1, 50], [0.5, 25], [0.25, 11], [0.1, 5]]) #bands for coarse noise
-        ratio = self._spectral_noise((z_slices, N, N), bands_ratio, 0.8, 1, 8, rng)**0.8
-
-        global_scale = rng.uniform(0.8, 1.2)
-        scale = global_scale*self._spectral_noise((z_slices, N, N), bands_ratio, 0.8, 0.8, 1.5, rng)
+        noise_theta = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., -0.1, 0.1, rng)
+        noise_ratio = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., 0.6, 1.1, rng) #ratio movement should be biased negative?
+        R = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., 2,15, rng)
 
 
-        seeds0 = self._sample_fg_pts_density(
-            fg,
-            n=n_seeds,
-            density=fg,
-            rng=rng
-        )
 
 
-        seeds0_scaled = seeds0.astype(float).copy()
-        seeds0_scaled[:, 0] *= z_ratio
 
- 
-  
-
-        seeds, labels, dist = self._anisotropic_lloyd_relaxation(
-            fg,
-            seeds0,
-            theta,
-            ratio,
-            scale,
-            z_ratio,
-            density=None,
-            n_iter=rng.integers(4, 7),
-            alpha=1.0,
-            R=None,
-            rng=rng,
-        )
+        seeds, labels, dist = self._anisotropic_lloyd_relaxation(surf, seeds, ratios, thetas, noise_theta, noise_ratio, 5, 1.0, R)
 
         boundary = np.zeros_like(labels, dtype=bool)
 
@@ -595,11 +350,9 @@ class SyntheticFluorStains(Dataset):
 
         labels_bin = dist_labels_bin_r > 2
 
-        #dist will be used for rings
-        fg_expand = dist_t(~fg) < rng.uniform(5, 20)
-        nonnuc = fg_expand * (~labels_bin)
+        nonnuc_labels_bin = dist_t(~boundary) < 3
 
-        return labels, labels_bin, boundary, dist_labels_bin_r, nonnuc
+        return labels, labels_bin, nonnuc_labels_bin, dist_labels_bin_r
 
     @staticmethod
     @njit(cache=True)
@@ -639,7 +392,7 @@ class SyntheticFluorStains(Dataset):
 
         return out
 
-    def _generate_conc(self, dist, labels, bdry, nonnuc_a, rng):
+    def _generate_conc(self, dist, labels, rng):
         (z_slices, H, W) = labels.shape
         boundary = np.zeros_like(labels, dtype=bool)
 
