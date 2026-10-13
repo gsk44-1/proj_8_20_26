@@ -306,7 +306,7 @@ class SyntheticFluorStains(Dataset):
         N = self.N
         z_slices = self.z_slices
         z_ratio = self.z_ratio
-        n_seeds = rng.integers(round(self.n_seeds*0.6), round(self.n_seeds*2))
+        n_seeds = rng.integers(round(self.n_seeds*0.6), round(self.n_seeds*1.2))
 
 
         surf = self._spectral_noise((z_slices, N, N), np.array([[5, 150], [0.5, 50]]), 0.9, -1, 1, rng)
@@ -558,7 +558,7 @@ class SyntheticFluorStains(Dataset):
 
         ring = ring_normal**rng.integers(2, 6)
 
-        prenoise_conc = np.float32(dist!=0) + (rng.uniform(0.8, 1.5)*ring)
+        prenoise_conc = np.float32(dist!=0) + (rng.uniform(0.8, 2)*ring)
         degraded_bdry = boundary * self._spectral_noise(vol_shape, np.array([[3, 100], [1, 50], [0.2, 25]]), 0.7, 0, 1., rng)
         
         prenoise_conc = prenoise_conc * (1 - degraded_bdry)
@@ -587,7 +587,7 @@ class SyntheticFluorStains(Dataset):
         return conc
 
     def _gen_nonnuc_conc(self, labels, bdry, rng):
-        print("nonnuc")
+        #print("nonnuc")
         #nonnuclear concentration
         vol_shape = labels.shape
 
