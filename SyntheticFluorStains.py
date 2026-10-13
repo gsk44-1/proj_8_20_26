@@ -406,7 +406,143 @@ class SyntheticFluorStains(Dataset):
         nuc_conc = self._gen_nuc_conc(labels,dist, rng)
         nonnuc_conc = self._gen_nonnuc_conc(labels, boundary, rng)
         return nuc_conc, nonnuc_conc
-    
+
+    @staticmethod
+    @njit(cache=True)
+    def anisotropic_geodesic_voronoi_numba(
+        mask,
+        seeds,
+        ratios,
+        thetas,
+        noise_theta,
+        noise_ratio,
+        R=None
+    ):
+        Z, H, W = mask.shape
+        if R is None:
+            R = np.full((Z, H, W), np.inf)
+
+        dist = np.full((Z, H, W), np.inf)
+        labels = np.zeros((Z, H, W), dtype=np.int32)
+
+        ratios_f = np.zeros((Z, H, W))
+        thetas_f = np.ones((Z, H, W))
+        # Each heap item:
+        # (distance, z, y, x, seed_label)
+
+        # Numba needs the heap's element type to be inferable
+        heap = [(0.0, 0, 0, 0, 0., 0., 0)]
+        heapq.heappop(heap)
+
+        # Initialize every seed
+        for i in range(seeds.shape[0]):
+
+            z = seeds[i, 0]
+            y = seeds[i, 1]
+            x = seeds[i, 2]
+            #print(f"location: {x}, {y}, {z}")
+
+            if (
+                y >= 0 and y < H
+                and x >= 0 and x < W
+                and z >= 0 and z < Z
+                and mask[z, y, x]
+            ):
+                label_id = i
+
+                dist[z, y, x] = 0.0
+                labels[z, y, x] = label_id
+
+
+
+                heapq.heappush(
+                    heap,
+                    (0.0, z, y, x, thetas[i], ratios[i], label_id)
+                )
+
+        # 26 cell neighborhood
+        dys = (-1, 1, 0, 0, -1, -1, 1, 1, -1, 1, 0, 0, -1, -1, 1, 1, -1, 1, 0, 0, -1, -1, 1, 1, 0, 0)
+        dxs = (0, 0, -1, 1, -1, 1, -1, 1, 0, 0, -1, 1, -1, 1, -1, 1, 0, 0, -1, 1, -1, 1, -1, 1, 0, 0)
+        dzs = (0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, 1, -1)
+
+
+        while len(heap) > 0:
+
+            current_dist, z, y, x, theta, ratio, label_id = heapq.heappop(heap)
+
+            # Ignore stale heap entry
+            if current_dist > dist[z, y, x]:
+                continue
+
+            # Important if another seed reached this pixel first
+            if labels[z, y, x] != label_id:
+                continue
+
+            for k in range(26):
+                dz = dzs[k]
+                dy = dys[k]
+                dx = dxs[k]
+
+                zz = z + dz
+                yy = y + dy
+                xx = x + dx
+
+                if (
+                    yy < 0 or yy >= H
+                    or xx < 0 or xx >= W
+                    or zz < 0 or zz >= Z
+                    or not mask[zz, yy, xx]
+                ):
+                    continue
+
+                c = math.cos(theta) #this assumes for now that the theta and ratio fields are the same for all z slices
+                s = math.sin(theta)
+
+                r = ratio
+                q = 1.0 / (r * r)
+                #we use metric at parent
+                reg = 1e-3
+                #a11
+                A11 = q * c * c + s * s + reg
+
+                #a12
+                A12 = (q - 1.0) * c * s
+
+                #a22
+                A22 = q * s * s + c * c + reg
+
+                #a33
+                A33 = 1 + reg#z_ratio**2
+
+
+
+                step_cost = math.sqrt(
+                    A11 * dx * dx
+                    + 2.0 * A12 * dx * dy
+                    + A22 * dy * dy
+                    + A33 * dz * dz
+                )
+
+                if not math.isfinite(step_cost):
+                    print("bad step_cost:", step_cost)
+                    print("A11,A12,A22,A33:", A11, A12, A22, A33)
+                    print("dx,dy,dz:", dx, dy, dz)
+
+                new_dist = (current_dist) + (step_cost)
+
+                if (new_dist < dist[zz, yy, xx]) and (new_dist < R[zz, yy, xx]):
+
+                    dist[zz, yy, xx] = new_dist
+                    labels[zz, yy, xx] = label_id
+                    delt_theta = noise_theta[zz, yy, xx]
+                    delt_ratio = noise_ratio[zz, yy, xx]
+                    heapq.heappush(
+                        heap,
+                        (new_dist, zz, yy, xx, theta+delt_theta, ratio*delt_ratio, label_id)
+                    )
+
+        return labels, dist
+
     def _gen_nuc_conc(self, labels, dist, rng):
         #nuclear concentration
         local_sz = 15  # neighborhood width
