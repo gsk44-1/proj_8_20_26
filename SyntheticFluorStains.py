@@ -352,7 +352,7 @@ class SyntheticFluorStains(Dataset):
 
         nonnuc_labels_bin = dist_t(~boundary) < 3
 
-        return labels, labels_bin, nonnuc_labels_bin, dist_labels_bin_r
+        return labels, labels_bin, nonnuc_labels_bin, dist
 
     @staticmethod
     @njit(cache=True)
@@ -403,7 +403,7 @@ class SyntheticFluorStains(Dataset):
                 mode="inner"
             )
         
-        nuc_conc = self._gen_nuc_conc(labels,dist, rng)
+        nuc_conc = self._gen_nuc_conc(labels, dist, rng)
         nonnuc_conc = self._gen_nonnuc_conc(labels, boundary, rng)
         return nuc_conc, nonnuc_conc
 
