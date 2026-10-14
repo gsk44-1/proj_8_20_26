@@ -45,7 +45,7 @@ class SyntheticFluorStains(Dataset):
         labels, nuc_labels, nonnuc_labels, dist_labels_bin_r = self._generate_cell_tiles(rng)
 
         #concentration
-        conc, conc_nonnuc = self._generate_conc(dist_labels_bin_r.copy(), labels, rng)
+        conc, conc_nonnuc = self._generate_conc(dist_labels_bin_r.copy(), labels.copy(), nonnuc_labels.copy(), rng)
 
         out_vol, out_nonnuc_vol = self._processing(conc, conc_nonnuc, rng)
         data = np.stack([out_vol, out_nonnuc_vol], axis=1)
@@ -320,8 +320,8 @@ class SyntheticFluorStains(Dataset):
         #now these are just lists of values for each seed
 
         noise_theta = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., -0.1, 0.1, rng)
-        noise_ratio = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., 0.6, 1.1, rng) #ratio movement should be biased negative?
-        R = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., 5,15, rng)
+        noise_ratio = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., 0.8, 1.05, rng) #ratio movement should be biased negative?
+        R = self._spectral_noise((z_slices, N, N), np.array([[5, 100]]), 1., 10, 15, rng)
 
 
 
@@ -350,15 +350,16 @@ class SyntheticFluorStains(Dataset):
 
         labels_bin = dist_labels_bin_r > 2
 
+        nonnuc_surround = (dist_t(~surf) < 5) & (~labels_bin)
         nonnuc_labels_bin = dist_t(~boundary) < 3
+        nonnuc_labels_bin = nonnuc_labels_bin | nonnuc_surround
+
 
         return labels, labels_bin, nonnuc_labels_bin, dist
 
     @staticmethod
     @njit(cache=True)
     def _assign_noise_to_labels(noise_map, objs, labels, rng):
-
-
         out = np.zeros(labels.shape, dtype=np.float64)
 
         Zn, Yn, Xn = noise_map.shape
@@ -392,7 +393,7 @@ class SyntheticFluorStains(Dataset):
 
         return out
 
-    def _generate_conc(self, dist, labels, rng):
+    def _generate_conc(self, dist, labels, nonnuc_labels, rng):
         (z_slices, H, W) = labels.shape
         boundary = np.zeros_like(labels, dtype=bool)
 
@@ -404,7 +405,7 @@ class SyntheticFluorStains(Dataset):
             )
         
         nuc_conc = self._gen_nuc_conc(labels, dist, boundary, rng)
-        nonnuc_conc = self._gen_nonnuc_conc(labels, boundary, rng)
+        nonnuc_conc = self._gen_nonnuc_conc(labels, boundary, nonnuc_labels, rng)
         return nuc_conc, nonnuc_conc
 
     @staticmethod
@@ -543,6 +544,23 @@ class SyntheticFluorStains(Dataset):
 
         return labels, dist
 
+    def _randomize_labels(self, labels, rng):
+        unique, inverse = np.unique(labels, return_inverse=True)
+        values = rng.uniform(0.4, 0.8, size=len(unique))
+        return values[inverse].reshape(labels.shape)
+    
+    def _random_bands(self, num_bands, rng):
+        bands = np.zeros((num_bands, 2))
+        amp = 10
+        scale = 100
+        for j in range(num_bands):
+          bands[j, 0] = amp  #amplitude
+          bands[j, 1] = scale
+
+          amp = (amp*(0.5**j)) * rng.uniform(0.3, 5)
+          scale /= 2
+        return bands
+
     def _gen_nuc_conc(self, labels, dist, boundary, rng):
         #nuclear concentration
         local_sz = 15  # neighborhood width
@@ -558,7 +576,8 @@ class SyntheticFluorStains(Dataset):
 
         ring = ring_normal**rng.integers(2, 6)
 
-        prenoise_conc = np.float32(dist!=0) + (rng.uniform(0.8, 3)*ring)
+        prenoise_conc = self._randomize_labels(labels, rng) #random background constant for each nuclei
+        prenoise_conc *= (1 + (rng.uniform(2, 3)*ring))
         degraded_bdry = boundary * self._spectral_noise(vol_shape, np.array([[3, 100], [1, 50], [0.2, 25]]), 0.7, 0, 1., rng)
         
         prenoise_conc = prenoise_conc * (1 - degraded_bdry)
@@ -566,11 +585,12 @@ class SyntheticFluorStains(Dataset):
         #assigning noise to different regions
         big_noise_shape = (round(self.z_slices*1.5), round(self.N*1.5), round(self.N*1.5))
 
-        bands = np.array([[25, 100], [15, 50], [8, 25], [10, 17], [12, 14], [7, 8], [3, 5], [0.8, 3], [0.6, 1]])
-        noise_map = self._spectral_noise(big_noise_shape, bands, 0.3, 0, 1., rng)
+        bands = self._random_bands(6, rng)
+
+        noise_map = self._spectral_noise(big_noise_shape, bands, 0.4, 0, 1., rng)
 
         bands = np.array([[25, 150], [15, 100], [8, 50], [3, 25], [1, 10]])
-        mod_noise = self._spectral_noise(big_noise_shape, bands, 0.4, 0.1, 1., rng)
+        mod_noise = self._spectral_noise(big_noise_shape, bands, 0.5, 0.1, 1., rng)
 
         noise_map *= mod_noise
       
@@ -586,28 +606,26 @@ class SyntheticFluorStains(Dataset):
         #conc_nonnuc = (conc_nonnuc - conc_nonnuc.min()) / (conc_nonnuc.max() - conc_nonnuc.min() + 1e-8)
         return conc
 
-    def _gen_nonnuc_conc(self, labels, bdry, rng):
+    def _gen_nonnuc_conc(self, labels, bdry, nonnuc_labels, rng):
         #print("nonnuc")
         #nonnuclear concentration
         vol_shape = labels.shape
 
-        bands1 = np.array([[1, 100], [1, 50], [1, 20], [0.05, 10]])
+        #bands1 = np.array([[1, 100], [1, 50], [1, 20], [0.05, 10]])
         bands2 = np.array([[1, 100], [1, 50], [0.05, 20]])
 
+        bands1 = self._random_bands(6, rng)
         noise1 = self._spectral_noise(vol_shape, bands1, 1, 0, 2, rng)
-
-        interior = np.zeros(vol_shape, dtype=np.bool)
-        thresh = rng.integers(4, 15)
-        for z in range(vol_shape[0]):
-            interior[z] = dist_t(~bdry[z])*noise1[z] < thresh
-
+        
         #interior = (interior - np.min(interior))/(np.max(interior) - np.min(interior) + 1e-4)
 
         cell_interiors = (labels != 0) ^ bdry
-        nonnuc = interior & (~cell_interiors)
-
+        
+        nonnuc = nonnuc_labels & (~cell_interiors)
+        
+        
         noise2 = self._spectral_noise(vol_shape, bands2, 2, 0.4, 1.5, rng)
-        #thicker boundaries
+        
         rings = dist_t(~nonnuc)
         rings = (rings.max() - rings)/(rings.max() - rings.min() + 1e-4)
         
@@ -617,17 +635,21 @@ class SyntheticFluorStains(Dataset):
 
         rings = (rings - local_ringmin) / (local_ringmax - local_ringmin + 1e-8)
 
+
         rings *= cell_interiors + nonnuc
+        rings = gaussian_filter(rings, 2, mode="reflect")
+        rings += self._spectral_noise(vol_shape, bands2, 2, 0.0, 0.3, rng)
         rings *= noise2
         rings = rings**rng.integers(2, 4)
+
 
         conc_nonnuc = (rings - rings.min()) / (rings.max() - rings.min() + 1e-8)
         return conc_nonnuc
 
     def _processing(self, conc_n, conc_nonnuc, rng):
         num_iter_rl = rng.integers(1, 7)
-        na1 = rng.uniform(0.6, 0.95)
-        na2 = rng.uniform(0.6, 0.95)
+        na1 = rng.uniform(0.75, 1.0)
+        na2 = rng.uniform(0.75, 1.0)
 
         pz1 = rng.uniform(0, 2)
         pz2 = rng.uniform(0, 2)
@@ -648,13 +670,13 @@ class SyntheticFluorStains(Dataset):
         photons = rng.uniform(100, 5500)
         photons_nonnuc = rng.uniform(100, 5500)
 
-        bg_noise_lvl = rng.uniform(0, 0.1)
+        bg_noise_lvl = rng.uniform(0, 0.05)
         bands = np.array([[5, 140], [0.05, 30], [0.01, 15], [0.005, 7]])
         backg_n = self._spectral_noise(conc_n.shape, bands, 0.7, 0, bg_noise_lvl, rng)
-        blurred_n += backg_n
+        #blurred_n += backg_n
      
         backg_nn = self._spectral_noise(conc_n.shape, bands, 0.7, 0, bg_noise_lvl, rng)
-        blurred_nonnuc += backg_nn
+        #blurred_nonnuc += backg_nn
 
         lam_n = blurred_n * photons
         lam_nn = blurred_nonnuc * photons_nonnuc
@@ -668,7 +690,7 @@ class SyntheticFluorStains(Dataset):
                                                     ns=1.40, tg=0, tg0=0))
         psf /= psf.sum()
 
-
+        
         recovered_n = richardson_lucy(
             noisy_n,
             psf,
@@ -681,19 +703,20 @@ class SyntheticFluorStains(Dataset):
             num_iter=num_iter_rl,
             clip=False
         )
+        
 
         #normalize
-        scale = np.percentile(recovered_n, 99.9)
-        recovered = np.clip(recovered_n / max(scale, 1e-8), 0, 1)
+        scale = np.percentile(noisy_n, 99.9)
+        noisy_n = np.clip(noisy_n / max(scale, 1e-8), 0, 1)
 
-        scale_nn = np.percentile(recovered_nn, 99.9)
-        recovered_nn = np.clip(recovered_nn / max(scale_nn, 1e-8), 0, 1)
+        scale_nn = np.percentile(noisy_nn, 99.9)
+        noisy_nn = np.clip(noisy_nn / max(scale_nn, 1e-8), 0, 1)
 
-        altered_img_n = self._random_bezier_transform(recovered_n, rng)
+        altered_img_n = self._random_bezier_transform(noisy_n, rng)
         altered_img_n = self._contrast(altered_img_n, rng)
         altered_img_n = self._brightness_scale(altered_img_n, rng)
         
-        altered_img_nn = self._random_bezier_transform(recovered_nn, rng)
+        altered_img_nn = self._random_bezier_transform(noisy_nn, rng)
         altered_img_nn = self._contrast(altered_img_nn, rng)
         altered_img_nn = self._brightness_scale(altered_img_nn, rng)
 
