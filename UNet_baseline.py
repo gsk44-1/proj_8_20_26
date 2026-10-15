@@ -1,3 +1,4 @@
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -46,7 +47,7 @@ class UNet(nn.Module):
     def __init__(
         self,
         in_channels=2,
-        out_channels=2,
+        out_channels=3,
         features=(16, 32, 64, 128),
         num_groups=8
     ):
@@ -103,8 +104,10 @@ class UNet(nn.Module):
             f1 * 2, f1, num_groups
         )
 
-        # No normalization here:
-        # map 16 feature channels directly to the desired output channels.
+        # Final layer: 3 output logits per pixel
+        # Channel 0 = background
+        # Channel 1 = nuclear
+        # Channel 2 = nonnuclear
         self.final = nn.Conv2d(
             f1,
             out_channels,
@@ -139,4 +142,6 @@ class UNet(nn.Module):
         x = torch.cat([x, x1], dim=1)
         x = self.dec1(x)
 
-        return F.softmax(self.final(x), dim=1)
+        # Return raw logits.
+        # CrossEntropyLoss applies log-softmax internally.
+        return self.final(x)
