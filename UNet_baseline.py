@@ -139,4 +139,4 @@ class UNet(nn.Module):
         x = torch.cat([x, x1], dim=1)
         x = self.dec1(x)
 
-        return F.softmax(self.final(x), dim=1)
+        return self.final(x)
