@@ -415,7 +415,7 @@ class MinimalSynthStains(Dataset):
     def _generate_conc(self, cell_structures, nuc_labels_bin, nonnuc_labels_bin, rng):
         (z_slices, H, W) = cell_structures.shape
 
-        base_conc = self._randomize_labels(cell_structures, 0.6, 1.2, rng)
+        base_conc = self._randomize_labels(cell_structures, 0.3, 1.6, rng)
         nuc_conc = (base_conc) * self._spectral_noise(nuc_labels_bin.shape, self._random_bands(rng), 1, 0.1, 1, rng)
         
         ridges = dist_t(nonnuc_labels_bin)
