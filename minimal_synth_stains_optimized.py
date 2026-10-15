@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from scipy.fft import rfftn, irfftn, fftfreq, rfftfreq
 from scipy.ndimage import (zoom, distance_transform_edt as dist_t,
                            gaussian_filter, find_objects, minimum_filter,
-                           maximum_filter)
+                           maximum_filter, label as connected_component_label)
 from scipy.signal import fftconvolve
 from skimage.segmentation import find_boundaries
 from numba import njit
@@ -415,8 +415,18 @@ class MinimalSynthStains(Dataset):
     def _generate_conc(self, cell_structures, nuc_labels_bin, nonnuc_labels_bin, rng):
         (z_slices, H, W) = cell_structures.shape
 
-        base_conc = self._randomize_labels(cell_structures, 0.6, 1.2, rng)
-        nuc_conc = (base_conc) * self._spectral_noise(nuc_labels_bin.shape, self._random_bands(rng), 1, 0.1, 1, rng)
+        # Assign per-region intensities from 3D connected components of the
+        # final, XY-smoothed nuclear mask instead of coarse Voronoi IDs.
+        # Full 26-connectivity allows diagonally neighboring voxels and
+        # connections across z slices to belong to the same component.
+        component_labels, _ = connected_component_label(
+            nuc_labels_bin,
+            structure=np.ones((3, 3, 3), dtype=bool),
+        )
+        base_conc = self._randomize_labels(component_labels, 0.6, 1.2, rng)
+        nuc_conc = base_conc * self._spectral_noise(
+            nuc_labels_bin.shape, self._random_bands(rng), 1, 0.1, 1, rng
+        )
         
         ridges = dist_t(nonnuc_labels_bin)
         #ridges = (ridges - ridges.min())/(ridges.max() - ridges.min() + 1e-4)
