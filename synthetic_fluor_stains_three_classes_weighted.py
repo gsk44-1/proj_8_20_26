@@ -198,7 +198,7 @@ class SyntheticFluorStains(Dataset):
             return {
                 "class_id": 2,
                 "n_seeds_range": (0.7, 1.3),
-                "ratio_range": (1.0, 10.0),
+                "ratio_range": (1.0, 15.0),
                 "theta_neighbor_k": 5,
                 "theta_neighbor_sigma": 30.0,
                 "theta_alignment_bands": np.array([[6.0, 80.0], [1.2, 35.0]]),
@@ -206,13 +206,13 @@ class SyntheticFluorStains(Dataset):
                 "theta_alignment_gamma": 0.7,
                 "theta_noise_bands": np.array([[6.0, 70.0], [1.0, 18.0]]),
                 "theta_noise_bdwidth": 1.1,
-                "theta_delta_range": (-0.3, 0.3),
+                "theta_delta_range": (-0.5, 0.5),
                 "ratio_noise_bands": np.array([[6.0, 70.0], [1.0, 18.0]]),
                 "ratio_noise_bdwidth": 1.1,
                 "ratio_noise_range": (0.75, 1.08),
                 "radius_bands": np.array([[7.0, 80.0], [1.0, 20.0]]),
                 "radius_bdwidth": 1.1,
-                "radius_range": (3.5, 7.0),
+                "radius_range": (3.5, 5.0),
                 "ring_exp_range": (5, 7),
             }
         if class_id == 3:
