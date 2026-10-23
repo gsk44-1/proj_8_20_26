@@ -192,7 +192,7 @@ class SyntheticFluorStains(Dataset):
                 "radius_bands": np.array([[5.0, 100.0], [0.6, 20.0]]),
                 "radius_bdwidth": 1.0,
                 "radius_range": (7.0, 15.0),
-                "nonnuc_mode": "baseline",
+                "ring_exp_range": (2, 5),
             }
         if class_id == 2:
             return {
@@ -206,19 +206,19 @@ class SyntheticFluorStains(Dataset):
                 "theta_alignment_gamma": 0.7,
                 "theta_noise_bands": np.array([[6.0, 70.0], [1.0, 18.0]]),
                 "theta_noise_bdwidth": 1.1,
-                "theta_delta_range": (-0.2, 0.2),
+                "theta_delta_range": (-0.3, 0.3),
                 "ratio_noise_bands": np.array([[6.0, 70.0], [1.0, 18.0]]),
                 "ratio_noise_bdwidth": 1.1,
                 "ratio_noise_range": (0.75, 1.08),
                 "radius_bands": np.array([[7.0, 80.0], [1.0, 20.0]]),
                 "radius_bdwidth": 1.1,
                 "radius_range": (3.5, 7.0),
-                "nonnuc_mode": "noisy",
+                "ring_exp_range": (5, 7),
             }
         if class_id == 3:
             return {
                 "class_id": 3,
-                "n_seeds_range": (1.35, 2.0),
+                "n_seeds_range": (1.35, 4.0),
                 "ratio_range": (1.0, 2.0),
                 "theta_neighbor_k": 8,
                 "theta_neighbor_sigma": 45.0,
@@ -233,8 +233,8 @@ class SyntheticFluorStains(Dataset):
                 "ratio_noise_range": (0.95, 1.02),
                 "radius_bands": np.array([[5.0, 120.0], [0.5, 35.0]]),
                 "radius_bdwidth": 0.9,
-                "radius_range": (5.5, 9.0),
-                "nonnuc_mode": "clear",
+                "radius_range": (5.5, 15.0),
+                "ring_exp_range": (2, 5),
             }
         raise ValueError(f"Unknown class_id {class_id}")
 
@@ -552,42 +552,31 @@ class SyntheticFluorStains(Dataset):
         return conc
 
     def _gen_nonnuc_conc(self, labels, bdry, nonnuc_labels, rng, profile):
-        # nonnuclear concentration
+        # nonnuclear concentration: original formulation, with class-specific
+        # ring exponents only.
         vol_shape = labels.shape
-        mode = profile.get("nonnuc_mode", "baseline")
+        bands2 = np.array([[1, 100], [1, 50], [0.05, 20]])
 
         cell_interiors = (labels != 0) ^ bdry
         nonnuc = nonnuc_labels & (~cell_interiors)
+
+        noise2 = self._spectral_noise(vol_shape, bands2, 2, 0.4, 1.5, rng)
+
         rings = dist_t(~nonnuc)
-        rings = (rings.max() - rings) / (rings.max() - rings.min() + 1e-4)
+        rings = (rings.max() - rings)/(rings.max() - rings.min() + 1e-4)
 
         local_sz = 25
         local_ringmin = minimum_filter(rings, size=local_sz)
         local_ringmax = maximum_filter(rings, size=local_sz)
+
         rings = (rings - local_ringmin) / (local_ringmax - local_ringmin + 1e-8)
         rings *= cell_interiors + nonnuc
+        rings = gaussian_filter(rings, 2, mode="reflect")
+        rings += self._spectral_noise(vol_shape, bands2, 2, 0.0, 0.3, rng)
+        rings *= noise2
 
-        if mode == "noisy":
-            bands2 = np.array([[1.2, 90], [1.0, 45], [0.6, 18], [0.25, 8]])
-            noise2 = self._spectral_noise(vol_shape, bands2, 2.2, 0.2, 1.7, rng)
-            rings = gaussian_filter(rings, 1.0, mode="reflect")
-            rings += self._spectral_noise(vol_shape, bands2, 2.0, 0.0, 0.55, rng)
-            rings *= noise2
-            rings = rings ** rng.integers(2, 5)
-        elif mode == "clear":
-            bands2 = np.array([[1.0, 130], [0.6, 70], [0.15, 30]])
-            noise2 = self._spectral_noise(vol_shape, bands2, 1.4, 0.75, 1.2, rng)
-            rings = gaussian_filter(rings, 3.0, mode="reflect")
-            rings += self._spectral_noise(vol_shape, bands2, 1.2, 0.0, 0.12, rng)
-            rings *= noise2
-            rings = rings ** rng.integers(1, 3)
-        else:
-            bands2 = np.array([[1, 100], [1, 50], [0.05, 20]])
-            noise2 = self._spectral_noise(vol_shape, bands2, 2, 0.4, 1.5, rng)
-            rings = gaussian_filter(rings, 2, mode="reflect")
-            rings += self._spectral_noise(vol_shape, bands2, 2, 0.0, 0.3, rng)
-            rings *= noise2
-            rings = rings ** rng.integers(2, 4)
+        exp_lo, exp_hi = profile.get("ring_exp_range", (2, 4))
+        rings = rings ** rng.integers(exp_lo, exp_hi + 1)
 
         conc_nonnuc = (rings - rings.min()) / (rings.max() - rings.min() + 1e-8)
         return conc_nonnuc
