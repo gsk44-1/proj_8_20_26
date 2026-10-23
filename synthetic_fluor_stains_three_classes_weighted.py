@@ -238,6 +238,58 @@ class SyntheticFluorStains(Dataset):
             }
         raise ValueError(f"Unknown class_id {class_id}")
 
+    def _lloyd_relax_seeds(self, seeds, grid_shape, n_iter, alpha=1.0):
+        """Centroidal Voronoi (Lloyd) relaxation on the coarse 3D grid.
+
+        Uses a KD-tree instead of the original O(voxels * seeds) brute-force
+        Voronoi loop. Distances respect xy_downsample and z_ratio. The Voronoi
+        assignment covers the full grid, matching the final growth mask.
+        """
+        seeds = np.asarray(seeds, dtype=np.int64).copy()
+        if n_iter <= 0 or len(seeds) < 2:
+            return seeds
+
+        coords = np.indices(grid_shape, dtype=np.int32).reshape(3, -1).T
+        spacing = np.array([self.z_ratio, self.xy_downsample,
+                            self.xy_downsample], dtype=np.float64)
+        physical_coords = coords * spacing
+        for _ in range(n_iter):
+            tree = cKDTree(seeds * spacing)
+            _, owner = tree.query(physical_coords, k=1, workers=-1)
+            counts = np.bincount(owner, minlength=len(seeds))
+            updated = seeds.copy()
+            populated = counts > 0
+            for axis in range(3):
+                totals = np.bincount(owner, weights=coords[:, axis],
+                                     minlength=len(seeds))
+                centers = totals[populated] / counts[populated]
+                updated[populated, axis] = np.rint(
+                    (1.0 - alpha) * seeds[populated, axis]
+                    + alpha * centers
+                ).astype(np.int64)
+            updated = np.clip(updated, 0, np.array(grid_shape) - 1)
+
+            # Keep seeds distinct after rounding, rather than losing a cell.
+            occupied = set()
+            for i in range(len(updated)):
+                candidate = tuple(updated[i])
+                if candidate in occupied:
+                    old = tuple(seeds[i])
+                    if old not in occupied:
+                        candidate = old
+                    else:
+                        # Find an unused lattice point near the desired centroid.
+                        order = np.argsort(np.sum(
+                            (physical_coords - updated[i] * spacing) ** 2,
+                            axis=1
+                        ))
+                        candidate = next(tuple(coords[j]) for j in order
+                                         if tuple(coords[j]) not in occupied)
+                    updated[i] = candidate
+                occupied.add(candidate)
+            seeds = updated
+        return seeds
+
     def _generate_cell_tiles(self, rng, profile):
         N = self.N
         z_slices = self.z_slices
@@ -250,6 +302,13 @@ class SyntheticFluorStains(Dataset):
         surf = (surf_field > -0.3) & (surf_field < 0.3)
         surf_coarse = surf[:, ::scale, ::scale]
         seeds = self._sample_fg_pts_density(surf_coarse, n_seeds, rng)
+        if profile["class_id"] == 3:
+            # Class 3 only: random 2..5 full-strength Lloyd iterations.
+            # Relax seed positions before computing neighborhood orientations.
+            n_lloyd = int(rng.integers(2, 6))
+            seeds = self._lloyd_relax_seeds(
+                seeds, surf_coarse.shape, n_iter=n_lloyd, alpha=1.0
+            )
         ratios = rng.uniform(profile["ratio_range"][0], profile["ratio_range"][1], size=n_seeds)
         # Axial orientations: theta and theta + pi describe the same axis.
         thetas = rng.uniform(0.0, np.pi, size=n_seeds)
