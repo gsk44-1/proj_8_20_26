@@ -175,7 +175,7 @@ class SyntheticFluorStains(Dataset):
         surf = (surf_field > -0.3) & (surf_field < 0.3)
         surf_coarse = surf[:, ::scale, ::scale]
         seeds = self._sample_fg_pts_density(surf_coarse, n_seeds, rng)
-        ratios = rng.uniform(1., 20., size=n_seeds)
+        ratios = rng.uniform(1., 14., size=n_seeds)
         # Axial orientations: theta and theta + pi describe the same axis.
         thetas = rng.uniform(0.0, np.pi, size=n_seeds)
 
@@ -184,7 +184,7 @@ class SyntheticFluorStains(Dataset):
         # own random axis with the circular mean of nearby seed axes.
         alignment_field = self._spectral_noise(
             shape, np.array([[5, 100], [1, 50]]), 0.8, 0.0, 1.0, rng
-        )
+        )**0.3
         alignment = alignment_field[
             seeds[:, 0], seeds[:, 1] * scale, seeds[:, 2] * scale
         ]
@@ -413,15 +413,13 @@ class SyntheticFluorStains(Dataset):
         values = rng.uniform(0.4, 0.8, size=len(unique))
         return values[inverse].reshape(labels.shape)
     
-    def _random_bands(self, num_bands, rng):
-        bands = np.zeros((num_bands, 2))
-        amp = 10
+    def _random_bands(self, rng):
+        bands = np.zeros((7, 2))
+        amps_default = [10, 5, 3, 4, 2, 1, 0.1]
         scale = 100
-        for j in range(num_bands):
-          bands[j, 0] = amp  #amplitude
+        for j in range(7):
+          bands[j, 0] = amps_default[j]*rng.uniform(0.6, 1.5)  #amplitude
           bands[j, 1] = scale
-
-          amp = (amp*(0.5**j)) * rng.uniform(0.3, 5)
           scale /= 2
         return bands
 
@@ -449,7 +447,7 @@ class SyntheticFluorStains(Dataset):
         #assigning noise to different regions
         big_noise_shape = (round(self.z_slices*1.5), round(self.N*1.5), round(self.N*1.5))
 
-        bands = self._random_bands(6, rng)
+        bands = self._random_bands(rng)
 
         noise_map = self._spectral_noise(big_noise_shape, bands, 0.4, 0, 1., rng)
 
@@ -477,7 +475,7 @@ class SyntheticFluorStains(Dataset):
         #bands1 = np.array([[1, 100], [1, 50], [1, 20], [0.05, 10]])
         bands2 = np.array([[1, 100], [1, 50], [0.05, 20]])
 
-        bands1 = self._random_bands(6, rng)
+        bands1 = self._random_bands(rng)
         noise1 = self._spectral_noise(vol_shape, bands1, 1, 0, 2, rng)
         
         #interior = (interior - np.min(interior))/(np.max(interior) - np.min(interior) + 1e-4)
