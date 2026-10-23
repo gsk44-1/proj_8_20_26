@@ -184,7 +184,7 @@ class SyntheticFluorStains(Dataset):
         # own random axis with the circular mean of nearby seed axes.
         alignment_field = self._spectral_noise(
             shape, np.array([[5, 100], [1, 50]]), 0.8, 0.0, 1.0, rng
-        )**0.3
+        )**0.5
         alignment = alignment_field[
             seeds[:, 0], seeds[:, 1] * scale, seeds[:, 2] * scale
         ]
@@ -193,9 +193,9 @@ class SyntheticFluorStains(Dataset):
         )
 
         # Create correlated fields at native resolution; sample at coarse nodes.
-        theta = self._spectral_noise(shape, np.array([[5, 100]]), 1., -0.1, 0.1, rng)
-        ratio = self._spectral_noise(shape, np.array([[5, 100]]), 1., 0.8, 1.05, rng)
-        radius = self._spectral_noise(shape, np.array([[5, 100]]), 1., 10, 15, rng)
+        theta = self._spectral_noise(shape, np.array([[5, 100], [0.6, 20]]), 1., -0.1, 0.1, rng)
+        ratio = self._spectral_noise(shape, np.array([[5, 100], [0.6, 20]]), 1., 0.8, 1.01, rng)
+        radius = self._spectral_noise(shape, np.array([[5, 100], [0.6, 20]]), 1., 7, 15, rng)
         # The original model propagates across the entire image, not only surf.
         # XY steps on the coarse grid have physical length 'scale'.
         coarse_labels, coarse_dist = self._anisotropic_geodesic_voronoi_numba(
