@@ -26,16 +26,39 @@ class ConditionalEnergy(nn.Module):
             raise ValueError('hidden_channels must be divisible by num_groups')
         self.state_l2 = state_l2
         self.net = nn.Sequential(
-            nn.Conv2d(input_channels + state_channels, hidden_channels, 3,
-                      padding=1, bias=False),
-            nn.GroupNorm(num_groups, hidden_channels), nn.SiLU(),
-            nn.Conv2d(hidden_channels, hidden_channels, 3,
-                      padding=1, bias=False),
-            nn.GroupNorm(num_groups, hidden_channels), nn.SiLU(),
-            nn.Conv2d(hidden_channels, hidden_channels, 3,
-                      padding=1, bias=False),
-            nn.GroupNorm(num_groups, hidden_channels), nn.SiLU(),
-            nn.Conv2d(hidden_channels, 1, 1),
+            nn.Conv2d(
+                input_channels + state_channels,
+                hidden_channels,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            nn.SiLU(),
+
+            nn.Conv2d(
+                hidden_channels,
+                hidden_channels,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            nn.SiLU(),
+
+            nn.Conv2d(
+                hidden_channels,
+                hidden_channels,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            nn.SiLU(),
+
+            nn.Conv2d(
+                hidden_channels,
+                1,
+                kernel_size=1,
+                bias=False,
+            ),
         )
 
     def per_sample(self, image, state):
