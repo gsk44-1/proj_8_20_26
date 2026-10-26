@@ -2,7 +2,8 @@
 
 Input: 2 fixed imaging channels. Output: 3 segmentation logits.
 Mutable state: 3 logits + 5 auxiliary channels. The same scalar energy is
-used for every optimization step, and gradients include GroupNorm derivatives.
+used for every optimization step. The energy CNN uses SiLU activations and
+a 1-2-3 hybrid dilation schedule without GroupNorm.
 
 Use CSVTrainingLogger.log_step() after backward, before optimizer.step().
 Use CSVTrainingLogger.log_trajectory() occasionally on a *small fixed*
@@ -25,12 +26,17 @@ class ConditionalEnergy(nn.Module):
         if hidden_channels % num_groups:
             raise ValueError('hidden_channels must be divisible by num_groups')
         self.state_l2 = state_l2
+        # Increasing dilation expands context without adding parameters.
+        # 3x3 kernels with dilations (1, 2, 3) have a 13x13
+        # receptive field for each energy-density output pixel.
+        # Set padding=dilation to keep the spatial dimensions fixed.
         self.net = nn.Sequential(
             nn.Conv2d(
                 input_channels + state_channels,
                 hidden_channels,
                 kernel_size=3,
                 padding=1,
+                dilation=1,
                 bias=False,
             ),
             nn.SiLU(),
@@ -39,7 +45,8 @@ class ConditionalEnergy(nn.Module):
                 hidden_channels,
                 hidden_channels,
                 kernel_size=3,
-                padding=1,
+                padding=2,
+                dilation=2,
                 bias=False,
             ),
             nn.SiLU(),
@@ -48,7 +55,8 @@ class ConditionalEnergy(nn.Module):
                 hidden_channels,
                 hidden_channels,
                 kernel_size=3,
-                padding=1,
+                padding=3,
+                dilation=3,
                 bias=False,
             ),
             nn.SiLU(),
