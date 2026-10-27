@@ -3,7 +3,7 @@
 Input: 2 fixed imaging channels. Output: 3 segmentation logits.
 Mutable state: 3 logits + 5 auxiliary channels. The same scalar energy is
 used for every optimization step. The energy CNN uses SiLU activations and
-a 1-2-3 hybrid dilation schedule without GroupNorm.
+a 1-2-4 hybrid dilation schedule without GroupNorm.
 
 Use CSVTrainingLogger.log_step() after backward, before optimizer.step().
 Use CSVTrainingLogger.log_trajectory() occasionally on a *small fixed*
@@ -27,7 +27,7 @@ class ConditionalEnergy(nn.Module):
             raise ValueError('hidden_channels must be divisible by num_groups')
         self.state_l2 = state_l2
         # Increasing dilation expands context without adding parameters.
-        # 3x3 kernels with dilations (1, 2, 3) have a 13x13
+        # 3x3 kernels with dilations (1, 2, 4) have a 15x15
         # receptive field for each energy-density output pixel.
         # Set padding=dilation to keep the spatial dimensions fixed.
         self.net = nn.Sequential(
@@ -45,16 +45,6 @@ class ConditionalEnergy(nn.Module):
                 hidden_channels,
                 hidden_channels,
                 kernel_size=3,
-                padding=2,
-                dilation=2,
-                bias=False,
-            ),
-            nn.SiLU(),
-
-            nn.Conv2d(
-                hidden_channels,
-                hidden_channels,
-                kernel_size=3,
                 padding=3,
                 dilation=3,
                 bias=False,
@@ -63,10 +53,15 @@ class ConditionalEnergy(nn.Module):
 
             nn.Conv2d(
                 hidden_channels,
-                1,
-                kernel_size=1,
+                hidden_channels,
+                kernel_size=3,
+                padding=7,
+                dilation=7,
                 bias=False,
             ),
+            nn.SiLU(),
+
+            nn.Conv2d(hidden_channels, 1, kernel_size=1, bias=False),
         )
 
     def per_sample(self, image, state):
@@ -96,6 +91,15 @@ class VariationalNucleiSegmenter(nn.Module):
             num_groups, state_l2
         )
         self.log_step = nn.Parameter(torch.tensor(initial_step).log())
+        # Positive diagonal preconditioner, one multiplier per state channel.
+        # Zero initialization gives all multipliers = 1 (original Euler update).
+        self.log_channel_scale = nn.Parameter(torch.zeros(self.state_channels))
+
+    def channel_scales(self):
+        # Geometric mean of scales is 1: overall speed stays in log_step,
+        # while these parameters learn only relative per-channel speeds.
+        log_scales = self.log_channel_scale
+        return (log_scales - log_scales.mean()).exp().view(1, -1, 1, 1)
 
     def forward(self, image, steps=None, return_state=False):
         nsteps = self.steps if steps is None else steps
@@ -103,6 +107,7 @@ class VariationalNucleiSegmenter(nn.Module):
             image.shape[0], self.state_channels, *image.shape[-2:]
         )
         step = self.log_step.exp()
+        channel_scales = self.channel_scales()
         for _ in range(nsteps):
             with torch.enable_grad():
                 state = state.requires_grad_(True)
@@ -110,7 +115,7 @@ class VariationalNucleiSegmenter(nn.Module):
                 gradient = torch.autograd.grad(
                     energy, state, create_graph=self.training
                 )[0]
-            state = state - step * gradient
+            state = state - step * channel_scales * gradient
             if not self.training:
                 state = state.detach()
         logits = state[:, :self.out_channels]
@@ -127,6 +132,7 @@ class VariationalNucleiSegmenter(nn.Module):
             image.shape[0], self.state_channels, *image.shape[-2:]
         )
         step_size = self.log_step.detach().exp()
+        channel_scales = self.channel_scales().detach()
         records = []
         for t in range(steps + 1):
             with torch.enable_grad():
@@ -146,13 +152,14 @@ class VariationalNucleiSegmenter(nn.Module):
                     'logits_rms': logits.square().mean().sqrt().item(),
                     'aux_rms': q[:, self.out_channels:].square().mean().sqrt().item()
                     if self.state_channels > self.out_channels else 0.0,
-                    'update_rms': (step_size * g).square().mean().sqrt().item() if t < steps else 0.0,
+                    'update_rms': (step_size * channel_scales * g).square().mean().sqrt().item() if t < steps else 0.0,
                     'step_size': step_size.item(),
                 }
                 for c in range(self.state_channels):
                     ch = q[:, c].float()
                     row[f'state_{c}_mean'] = ch.mean().item()
                     row[f'state_{c}_std'] = ch.std(unbiased=False).item()
+                    row[f'channel_scale_{c}'] = channel_scales[0, c, 0, 0].item()
                 if labels is not None:
                     row['cross_entropy'] = F.cross_entropy(logits, labels).item()
                     pred = logits.argmax(dim=1)
@@ -164,7 +171,7 @@ class VariationalNucleiSegmenter(nn.Module):
                         row[f'dice_class_{c}'] = (2 * intersect / denom) if denom else 1.0
                 records.append(row)
                 if t < steps:
-                    state = q - step_size * g.detach()
+                    state = q - step_size * channel_scales * g.detach()
         for t in range(steps):
             records[t]['energy_change'] = (records[t+1]['energy_per_pixel'] - records[t]['energy_per_pixel'])
             records[t]['energy_increased'] = int(records[t]['energy_change'] > 1e-7)
@@ -280,6 +287,9 @@ if __name__ == '__main__':
     loss.backward()
     assert pred.shape == (1, 3, 16, 16)
     assert model.energy_model.net[0].weight.grad is not None
+    assert model.log_channel_scale.grad is not None
+    assert torch.allclose(model.channel_scales(), torch.ones_like(model.channel_scales()), atol=1e-5)
+    assert model.energy_model.net[4].dilation == (4, 4)
     model.eval()
     with torch.no_grad():
         assert model(x).shape == pred.shape
