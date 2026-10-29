@@ -191,7 +191,7 @@ class SyntheticFluorStains(Dataset):
                 "ratio_noise_range": (0.8, 1.01),
                 "radius_bands": np.array([[5.0, 100.0], [0.6, 20.0]]),
                 "radius_bdwidth": 1.0,
-                "radius_range": (7.0, 15.0),
+                "radius_range": (12.0, 18.0),
                 "ring_exp_range": (2, 5),
             }
         if class_id == 2:
@@ -212,14 +212,14 @@ class SyntheticFluorStains(Dataset):
                 "ratio_noise_range": (0.75, 1.08),
                 "radius_bands": np.array([[7.0, 80.0], [1.0, 20.0]]),
                 "radius_bdwidth": 1.1,
-                "radius_range": (3.5, 5.0),
+                "radius_range": (3.5, 7.0),
                 "ring_exp_range": (5, 7),
             }
         if class_id == 3:
             return {
                 "class_id": 3,
                 "n_seeds_range": (1.35, 4.0),
-                "ratio_range": (1.0, 2.0),
+                "ratio_range": (1.0, 2.5),
                 "theta_neighbor_k": 8,
                 "theta_neighbor_sigma": 45.0,
                 "theta_alignment_bands": np.array([[6.0, 120.0], [1.0, 55.0]]),
@@ -233,7 +233,7 @@ class SyntheticFluorStains(Dataset):
                 "ratio_noise_range": (0.95, 1.02),
                 "radius_bands": np.array([[5.0, 120.0], [0.5, 35.0]]),
                 "radius_bdwidth": 0.9,
-                "radius_range": (5.5, 15.0),
+                "radius_range": (5.5, 23.0),
                 "ring_exp_range": (2, 5),
             }
         raise ValueError(f"Unknown class_id {class_id}")
