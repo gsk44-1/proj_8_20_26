@@ -54,15 +54,17 @@ class SyntheticFluorStains(Dataset):
         class_id = int(rng.choice((1, 2, 3), p=self.class_probs))
         profile = self._sample_profile(class_id)
 
-        labels, nuc_labels, nonnuc_labels, dist_labels_bin_r = self._generate_cell_tiles(rng, profile)
+        labels_inst, nuc_labels, nonnuc_labels, dist_labels_bin_r = self._generate_cell_tiles(rng, profile)
 
         # concentration
-        conc, conc_nonnuc = self._generate_conc(dist_labels_bin_r, labels, nonnuc_labels, rng, profile)
+        conc, conc_nonnuc = self._generate_conc(dist_labels_bin_r, labels_inst, nonnuc_labels, rng, profile)
 
         out_vol, out_nonnuc_vol = self._processing(conc, conc_nonnuc, rng)
         data = np.stack([out_vol, out_nonnuc_vol], axis=1)
 
-        labels = np.stack([nuc_labels, nonnuc_labels], axis=1)
+        loss_weight = labels_inst!=0
+
+        labels = np.stack([nuc_labels, nonnuc_labels, loss_weight], axis=1)
         if self.return_class_id:
             return data, labels, class_id
         return data, labels
@@ -218,7 +220,7 @@ class SyntheticFluorStains(Dataset):
         if class_id == 3:
             return {
                 "class_id": 3,
-                "n_seeds_range": (1.35, 4.0),
+                "n_seeds_range": (1.0, 4.0),
                 "ratio_range": (1.0, 2.5),
                 "theta_neighbor_k": 8,
                 "theta_neighbor_sigma": 45.0,
@@ -233,7 +235,7 @@ class SyntheticFluorStains(Dataset):
                 "ratio_noise_range": (0.95, 1.02),
                 "radius_bands": np.array([[5.0, 120.0], [0.5, 35.0]]),
                 "radius_bdwidth": 0.9,
-                "radius_range": (5.5, 23.0),
+                "radius_range": (5.5, 18.0),
                 "ring_exp_range": (2, 5),
             }
         raise ValueError(f"Unknown class_id {class_id}")
@@ -305,7 +307,7 @@ class SyntheticFluorStains(Dataset):
         if profile["class_id"] == 3:
             # Class 3 only: random 2..5 full-strength Lloyd iterations.
             # Relax seed positions before computing neighborhood orientations.
-            n_lloyd = int(rng.integers(2, 6))
+            n_lloyd = int(rng.integers(2, 4))
             seeds = self._lloyd_relax_seeds(
                 seeds, surf_coarse.shape, n_iter=n_lloyd, alpha=1.0
             )
@@ -553,13 +555,13 @@ class SyntheticFluorStains(Dataset):
 
     def _randomize_labels(self, labels, rng):
         unique, inverse = np.unique(labels, return_inverse=True)
-        values = rng.uniform(0.4, 0.8, size=len(unique))
+        values = rng.uniform(0.35, 0.85, size=len(unique))
         return values[inverse].reshape(labels.shape)
     
     def _random_bands(self, rng):
         bands = np.zeros((7, 2))
-        amps_default = [10, 5, 3, 4, 2, 1, 0.1]
-        scale = 100
+        amps_default = [10, 5, 1.5, 3, 4, 2, 0.2]
+        scale = 100 #100, 50, 25, 12, 6, 3, 1.5
         for j in range(7):
           bands[j, 0] = amps_default[j]*rng.uniform(0.6, 1.5)  #amplitude
           bands[j, 1] = scale
@@ -582,7 +584,7 @@ class SyntheticFluorStains(Dataset):
         ring = ring_normal**rng.integers(2, 6)
 
         prenoise_conc = self._randomize_labels(labels, rng) #random background constant for each nuclei
-        prenoise_conc *= (1 + (rng.uniform(2, 3)*ring))
+        prenoise_conc *= (1 + (rng.uniform(2, 4)*ring))
         degraded_bdry = boundary * self._spectral_noise(vol_shape, np.array([[3, 100], [1, 50], [0.2, 25]]), 0.7, 0, 1., rng)
         
         prenoise_conc = prenoise_conc * (1 - degraded_bdry)
