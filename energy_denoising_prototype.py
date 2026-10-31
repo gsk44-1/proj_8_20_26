@@ -35,10 +35,8 @@ def make_energy_cnn(image_channels=2, state_channels=3, width=64):
     return nn.Sequential(
         nn.Conv2d(image_channels + state_channels, width, 3, padding=1),
         nn.SiLU(),
-        nn.AvgPool2d(kernel_size=2, stride=2),
-        nn.Conv2d(width, width, 3, padding=3),
+        nn.Conv2d(width, width, 3, padding=3, dilation=3),
         nn.SiLU(),
-        nn.AvgPool2d(kernel_size=2, stride=2),
         nn.Conv2d(width, width, 3, padding=7, dilation=7),
         nn.SiLU(),
         nn.Conv2d(width, 1, 1),
@@ -48,13 +46,35 @@ def make_energy_cnn(image_channels=2, state_channels=3, width=64):
 class SegmentationEnergyModel(nn.Module):
     """Energy on just three segmentation logits, trained via one-step updates."""
     def __init__(self, image_channels=2, classes=3, width=64,
-                 initial_step=0.3, state_l2=1e-3):
+                 initial_step=0.3, state_l2=1e-3,
+                 threshold=(0.25, 0.25), threshold_scale=3.0):
         super().__init__()
         self.image_channels = image_channels
         self.classes = classes
         self.state_l2 = state_l2
+        self.threshold = tuple(float(t) for t in threshold)
+        if len(self.threshold) != 2:
+            raise ValueError('threshold must have two values (nuclear, nonnuclear)')
+        self.threshold_scale = float(threshold_scale)
         self.net = make_energy_cnn(image_channels, classes, width)
         self.log_step = nn.Parameter(torch.tensor(math.log(initial_step)))
+
+    def initial_state(self, image, *, threshold=None):
+        """Image-derived logits: background=0, foreground=scale*(intensity-threshold).
+
+        Threshold may be a 2-tuple of floats or a tensor with shape [B,2,1,1]
+        for per-image randomized thresholds during training. No trainable
+        parameters or detached image features are required.
+        """
+        if image.shape[1] != 2 or self.classes != 3:
+            raise ValueError('Threshold initialization requires 2 image and 3 state channels')
+        threshold = self.threshold if threshold is None else threshold
+        t = torch.as_tensor(threshold, device=image.device, dtype=image.dtype)
+        if t.ndim == 1:
+            t = t.view(1, 2, 1, 1)
+        bg = torch.zeros_like(image[:, :1])
+        fg = self.threshold_scale * (image[:, :2] - t)
+        return torch.cat((bg, fg), dim=1)
 
     def energy(self, image, state):
         # Sum over spatial positions. Taking mean here would make the state
@@ -78,7 +98,7 @@ class SegmentationEnergyModel(nn.Module):
     def infer(self, image, *, steps=20, state=None):
         """Euler descent with constant memory; works under torch.no_grad()."""
         if state is None:
-            state = image.new_zeros(image.shape[0], self.classes, *image.shape[-2:])
+            state = self.initial_state(image)
         else:
             state = state.detach()
         for _ in range(steps):
@@ -122,8 +142,12 @@ class DenoisingConfig:
     gamma: float = 0.30            # fraction of error removed by desired step
     target_logit: float = 3.0      # true class 2, false classes -1
     max_rollout_steps: int = 12
-    # Probabilities correspond to zero, truth, interpolation, model trajectory.
-    source_probs: tuple = (0.25, 0.25, 0.25, 0.25)
+    # Probabilities: threshold, truth, threshold-truth interpolation,
+    # model rollout from threshold, and zero (small ablation fraction).
+    source_probs: tuple = (0.35, 0.15, 0.15, 0.30, 0.05)
+    # Jitter applied to per-channel thresholds in *training* only.
+    # Validation/inference always use the model's fixed thresholds.
+    threshold_jitter: float = 0.05
     perturb_probability: float = 0.75
     random_energy_probability: float = 0.70  # else Gaussian perturbation
     sigma_min: float = 0.10
@@ -141,18 +165,31 @@ def make_target_logits(targets, classes=3, amplitude=3.0, ignore_index=-100):
 
 
 def choose_training_state(model, image, target_logits, cfg):
-    """Return a state whose history is detached (one-step training only)."""
-    source = random.choices(range(4), weights=cfg.source_probs, k=1)[0]
-    if source == 0:
+    """Detach initial state histories, while covering actual threshold trajectories."""
+    if len(cfg.source_probs) != 5:
+        raise ValueError('source_probs must contain 5 probabilities')
+    source = random.choices(range(5), weights=cfg.source_probs, k=1)[0]
+    if source == 4:
         return torch.zeros_like(target_logits), 'zero'
     if source == 1:
         return target_logits.detach().clone(), 'target'
+
+    # Per-sample, per-channel threshold jitter reduces brittleness to
+    # imperfect intensity thresholds; it is not used at evaluation.
+    thresholds = torch.tensor(model.threshold, device=image.device,
+                              dtype=image.dtype).view(1, 2, 1, 1)
+    if cfg.threshold_jitter > 0:
+        thresholds = thresholds + (2 * torch.rand(image.shape[0], 2, 1, 1,
+                                      device=image.device) - 1) * cfg.threshold_jitter
+    threshold_state = model.initial_state(image, threshold=thresholds).detach()
+    if source == 0:
+        return threshold_state, 'threshold'
     if source == 2:
         t = torch.rand(image.shape[0], 1, 1, 1, device=image.device)
-        return ((1.0 - t) * target_logits).detach(), 'interpolation'
+        return ((1.0 - t) * threshold_state + t * target_logits).detach(), 'interpolation'
+
     k = random.randint(1, cfg.max_rollout_steps)
-    # No graph retained through this rollout, despite gradient-based inference.
-    return model.infer(image, steps=k).detach(), f'rollout_{k}'
+    return model.infer(image, steps=k, state=threshold_state).detach(), f'rollout_{k}'
 
 
 def train_one_batch(model, perturber, optimizer, image, targets,
@@ -206,8 +243,8 @@ if __name__ == '__main__':
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
     image = torch.randn(2, 2, 16, 16, device=device)
     targets = torch.randint(0, 3, (2, 16, 16), device=device)
-    for source in range(4):
-        cfg = DenoisingConfig(source_probs=tuple(float(i == source) for i in range(4)),
+    for source in range(5):
+        cfg = DenoisingConfig(source_probs=tuple(float(i == source) for i in range(5)),
                               max_rollout_steps=3)
         info = train_one_batch(model, perturber, opt, image, targets, cfg)
         assert info is not None
