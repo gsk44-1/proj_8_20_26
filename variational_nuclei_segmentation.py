@@ -52,12 +52,14 @@ class ConditionalEnergy(nn.Module):
             ),
             nn.SiLU(),
 
+            nn.AvgPool2d(kernel_size=2, stride=2)
+
             nn.Conv2d(
                 hidden_channels,
                 hidden_channels,
                 kernel_size=3,
                 padding=7,
-                dilation=7,
+                dilation=3,
                 bias=False,
             ),
             nn.SiLU(),
