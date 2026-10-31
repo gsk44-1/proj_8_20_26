@@ -56,16 +56,6 @@ class ConditionalEnergy(nn.Module):
                 hidden_channels,
                 hidden_channels,
                 kernel_size=3,
-                padding=3,
-                dilation=3,
-                bias=False,
-            ),
-            nn.SiLU(),
-
-            nn.Conv2d(
-                hidden_channels,
-                hidden_channels,
-                kernel_size=3,
                 padding=7,
                 dilation=7,
                 bias=False,
