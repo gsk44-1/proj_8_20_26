@@ -1,9 +1,10 @@
 """Input-conditioned, shared-energy variational nuclei segmentation with CSV diagnostics.
 
 Input: 2 fixed imaging channels. Output: 3 segmentation logits.
-Mutable state: 3 logits + 5 auxiliary channels. The same scalar energy is
-used for every optimization step. The energy CNN uses SiLU activations and
-a 1-2-4 hybrid dilation schedule without GroupNorm.
+Mutable state: 3 logits + configurable auxiliary channels. The same scalar
+energy is used for every optimization step. The energy CNN uses SiLU
+activations and a 1-3-7 dilation schedule without GroupNorm. Inference uses
+Euler-started Adams-Bashforth 2 (AB2) by default, with Euler as a control.
 
 Use CSVTrainingLogger.log_step() after backward, before optimizer.step().
 Use CSVTrainingLogger.log_trajectory() occasionally on a *small fixed*
@@ -27,7 +28,7 @@ class ConditionalEnergy(nn.Module):
             raise ValueError('hidden_channels must be divisible by num_groups')
         self.state_l2 = state_l2
         # Increasing dilation expands context without adding parameters.
-        # 3x3 kernels with dilations (1, 2, 4) have a 15x15
+        # 3x3 kernels with dilations (1, 3, 7) have a 23x23
         # receptive field for each energy-density output pixel.
         # Set padding=dilation to keep the spatial dimensions fixed.
         self.net = nn.Sequential(
@@ -37,6 +38,16 @@ class ConditionalEnergy(nn.Module):
                 kernel_size=3,
                 padding=1,
                 dilation=1,
+                bias=False,
+            ),
+            nn.SiLU(),
+
+            nn.Conv2d(
+                hidden_channels,
+                hidden_channels,
+                kernel_size=3,
+                padding=3,
+                dilation=3,
                 bias=False,
             ),
             nn.SiLU(),
@@ -79,8 +90,11 @@ class ConditionalEnergy(nn.Module):
 class VariationalNucleiSegmenter(nn.Module):
     def __init__(self, input_channels=2, out_channels=3, auxiliary_channels=5,
                  hidden_channels=328, num_groups=8, steps=10,
-                 initial_step=0.1, state_l2=0.01):
+                 initial_step=0.1, state_l2=0.01, integrator="ab2"):
         super().__init__()
+        if integrator not in ("ab2", "euler"):
+            raise ValueError("integrator must be 'ab2' or 'euler'")
+        self.integrator = integrator
         if initial_step <= 0:
             raise ValueError('initial_step must be positive')
         self.out_channels = out_channels
@@ -102,12 +116,20 @@ class VariationalNucleiSegmenter(nn.Module):
         return (log_scales - log_scales.mean()).exp().view(1, -1, 1, 1)
 
     def forward(self, image, steps=None, return_state=False):
+        """Euler startup, then AB2 (or Euler throughout if requested).
+
+        Every step evaluates the CURRENT energy gradient exactly once. The
+        PREVIOUS gradient is reused without recomputation. Training retains
+        its graph so differentiation flows through both AB2 branches.
+        """
         nsteps = self.steps if steps is None else steps
         state = image.new_zeros(
             image.shape[0], self.state_channels, *image.shape[-2:]
         )
         step = self.log_step.exp()
         channel_scales = self.channel_scales()
+        previous_gradient = None
+
         for _ in range(nsteps):
             with torch.enable_grad():
                 state = state.requires_grad_(True)
@@ -115,9 +137,19 @@ class VariationalNucleiSegmenter(nn.Module):
                 gradient = torch.autograd.grad(
                     energy, state, create_graph=self.training
                 )[0]
-            state = state - step * channel_scales * gradient
+
+            if self.integrator == "ab2" and previous_gradient is not None:
+                direction = 1.5 * gradient - 0.5 * previous_gradient
+            else:
+                direction = gradient  # Euler startup (or Euler baseline)
+
+            state = state - step * channel_scales * direction
             if not self.training:
                 state = state.detach()
+                previous_gradient = gradient.detach()
+            else:
+                previous_gradient = gradient
+
         logits = state[:, :self.out_channels]
         return (logits, state) if return_state else logits
 
@@ -134,6 +166,7 @@ class VariationalNucleiSegmenter(nn.Module):
         step_size = self.log_step.detach().exp()
         channel_scales = self.channel_scales().detach()
         records = []
+        previous_gradient = None
         for t in range(steps + 1):
             with torch.enable_grad():
                 state = state.detach().requires_grad_(True)
@@ -141,6 +174,10 @@ class VariationalNucleiSegmenter(nn.Module):
                 # state derivatives, and create_graph=False prevents second order.
                 energy = self.energy_model(image.detach(), state)
                 g = torch.autograd.grad(energy, state)[0]
+            if self.integrator == "ab2" and previous_gradient is not None:
+                direction = 1.5 * g - 0.5 * previous_gradient
+            else:
+                direction = g
             with torch.no_grad():
                 q = state.detach()
                 logits = q[:, :self.out_channels]
@@ -152,7 +189,7 @@ class VariationalNucleiSegmenter(nn.Module):
                     'logits_rms': logits.square().mean().sqrt().item(),
                     'aux_rms': q[:, self.out_channels:].square().mean().sqrt().item()
                     if self.state_channels > self.out_channels else 0.0,
-                    'update_rms': (step_size * channel_scales * g).square().mean().sqrt().item() if t < steps else 0.0,
+                    'update_rms': (step_size * channel_scales * direction).square().mean().sqrt().item() if t < steps else 0.0,
                     'step_size': step_size.item(),
                 }
                 for c in range(self.state_channels):
@@ -171,7 +208,8 @@ class VariationalNucleiSegmenter(nn.Module):
                         row[f'dice_class_{c}'] = (2 * intersect / denom) if denom else 1.0
                 records.append(row)
                 if t < steps:
-                    state = q - step_size * channel_scales * g.detach()
+                    state = q - step_size * channel_scales * direction.detach()
+                    previous_gradient = g.detach()
         for t in range(steps):
             records[t]['energy_change'] = (records[t+1]['energy_per_pixel'] - records[t]['energy_per_pixel'])
             records[t]['energy_increased'] = int(records[t]['energy_change'] > 1e-7)
@@ -289,10 +327,16 @@ if __name__ == '__main__':
     assert model.energy_model.net[0].weight.grad is not None
     assert model.log_channel_scale.grad is not None
     assert torch.allclose(model.channel_scales(), torch.ones_like(model.channel_scales()), atol=1e-5)
-    assert model.energy_model.net[4].dilation == (4, 4)
+    assert model.energy_model.net[4].dilation == (7, 7)
     model.eval()
     with torch.no_grad():
         assert model(x).shape == pred.shape
         trajectory = model.diagnostic_trajectory(x, y, steps=3)
     assert len(trajectory) == 4
+    # When only one update is requested, AB2 and Euler must agree.
+    euler = VariationalNucleiSegmenter(hidden_channels=16, steps=2, integrator="euler")
+    euler.load_state_dict(model.state_dict())
+    model.train()
+    euler.train()
+    assert torch.allclose(model(x, steps=1), euler(x, steps=1), atol=1e-6)
     print('Smoke test passed; default parameters:', num_parameters(VariationalNucleiSegmenter()))
