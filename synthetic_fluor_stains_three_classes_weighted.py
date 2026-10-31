@@ -15,6 +15,43 @@ import psfmodels as psfm
 from numba import njit
 
 
+# Domain-specific imaging/staining distributions. Edit these ranges to create
+# controlled distribution shifts; all three domains initially reproduce the
+# original generator. Floating ranges are sampled uniformly. PSF sizes are
+# odd integer support widths, sampled inclusively in steps of 2.
+# psf_nz and psf_nx control the number of PSF kernel samples, NOT optical
+# resolution directly (which also depends on NA, pz, wavelength and spacing).
+DOMAIN_CONFIGS = {
+    "a": {
+        "photons": (100, 5500),
+        "na": (0.75, 1.0),
+        "pz": (0.0, 2.0),
+        "psf_nz": (15, 15),
+        "psf_nx": (31, 31),
+        "label_intensity": (0.35, 0.85),
+        "ring_intensity": (2.0, 4.0),
+    },
+    "b": {
+        "photons": (40, 320),
+        "na": (0.75, 1.0),
+        "pz": (0.0, 2.0),
+        "psf_nz": (15, 15),
+        "psf_nx": (31, 31),
+        "label_intensity": (0.65, 0.95),
+        "ring_intensity": (3.0, 6.0),
+    },
+    "c": {
+        "photons": (5000, 10500),
+        "na": (0.35, 7.0),
+        "pz": (2.0, 4.0),
+        "psf_nz": (15, 15),
+        "psf_nx": (51, 51),
+        "label_intensity": (0.15, 0.45),
+        "ring_intensity": (5.0, 6.0),
+    },
+}
+
+
 class SyntheticFluorStains(Dataset):
     def __init__(
             self,
@@ -28,7 +65,15 @@ class SyntheticFluorStains(Dataset):
             boundary_smoothing_sigma = 0.8,
             return_class_id = False,
             class_probs = (1/3, 1/3, 1/3),
+            domain="a",
     ):
+        domain = str(domain).lower()
+        if domain not in DOMAIN_CONFIGS:
+            raise ValueError(f"domain must be one of {tuple(DOMAIN_CONFIGS)}, got {domain!r}")
+        self.domain = domain
+        # Copy prevents mutation of the global templates from this instance.
+        self.domain_config = DOMAIN_CONFIGS[domain].copy()
+        self._validate_domain_config()
         self.samples_per_epoch = samples_per_epoch
         self.seed = seed
         self.N = N
@@ -45,6 +90,36 @@ class SyntheticFluorStains(Dataset):
         self.class_probs = probs / probs.sum()
         if self.xy_downsample < 1 or N % self.xy_downsample:
             raise ValueError("xy_downsample must be a positive divisor of N")
+
+    def _validate_domain_config(self):
+        for name, bounds in self.domain_config.items():
+            if len(bounds) != 2 or not np.all(np.isfinite(bounds)):
+                raise ValueError(f"{self.domain}.{name} must be a finite pair")
+            lo, hi = bounds
+            if lo > hi:
+                raise ValueError(f"{self.domain}.{name} has reversed bounds")
+            if name in ("psf_nz", "psf_nx"):
+                if any(int(v) != v or int(v) < 1 or int(v) % 2 != 1 for v in bounds):
+                    raise ValueError(f"{self.domain}.{name} bounds must be positive odd integers")
+            elif name in ("photons", "na") and lo <= 0:
+                raise ValueError(f"{self.domain}.{name} must be positive")
+            elif name == "label_intensity" and lo < 0:
+                raise ValueError("label_intensity must be nonnegative")
+
+    def _domain_uniform(self, key, rng, size=None):
+        lo, hi = self.domain_config[key]
+        # With fixed bounds, do not consume an RNG draw.
+        if lo == hi:
+            if size is None:
+                return float(lo)
+            return np.full(size, float(lo))
+        return rng.uniform(lo, hi, size=size)
+
+    def _domain_odd_size(self, key, rng):
+        lo, hi = (int(x) for x in self.domain_config[key])
+        if lo == hi:
+            return lo
+        return int(lo + 2 * rng.integers(0, (hi - lo) // 2 + 1))
 
     def __len__(self):
         return self.samples_per_epoch
@@ -555,7 +630,7 @@ class SyntheticFluorStains(Dataset):
 
     def _randomize_labels(self, labels, rng):
         unique, inverse = np.unique(labels, return_inverse=True)
-        values = rng.uniform(0.35, 0.85, size=len(unique))
+        values = self._domain_uniform("label_intensity", rng, size=len(unique))
         return values[inverse].reshape(labels.shape)
     
     def _random_bands(self, rng):
@@ -584,7 +659,7 @@ class SyntheticFluorStains(Dataset):
         ring = ring_normal**rng.integers(2, 6)
 
         prenoise_conc = self._randomize_labels(labels, rng) #random background constant for each nuclei
-        prenoise_conc *= (1 + (rng.uniform(2, 4)*ring))
+        prenoise_conc *= (1 + (self._domain_uniform("ring_intensity", rng) * ring))
         degraded_bdry = boundary * self._spectral_noise(vol_shape, np.array([[3, 100], [1, 50], [0.2, 25]]), 0.7, 0, 1., rng)
         
         prenoise_conc = prenoise_conc * (1 - degraded_bdry)
@@ -643,10 +718,12 @@ class SyntheticFluorStains(Dataset):
         return conc_nonnuc
 
     def _processing(self, conc_n, conc_nonnuc, rng):
-        na1 = rng.uniform(0.75, 1.0)
-        pz1 = rng.uniform(0, 2)
+        na1 = self._domain_uniform("na", rng)
+        pz1 = self._domain_uniform("pz", rng)
+        psf_nz = self._domain_odd_size("psf_nz", rng)
+        psf_nx = self._domain_odd_size("psf_nx", rng)
 
-        psf = psfm.vectorial_psf_centered(nz=15, dz=0.2, nx=31, dxy=0.1125,
+        psf = psfm.vectorial_psf_centered(nz=psf_nz, dz=0.2, nx=psf_nx, dxy=0.1125,
                                         pz=pz1, wvl=0.461,
                                         params=dict(NA=na1, ni=1., ni0=1.0,
                                                     ns=1.40, tg=0, tg0=0))
@@ -659,8 +736,8 @@ class SyntheticFluorStains(Dataset):
         blurred_nonnuc = np.clip(blurred_nonnuc, 0, None)
 
 
-        photons = rng.uniform(100, 5500)
-        photons_nonnuc = rng.uniform(100, 5500)
+        photons = self._domain_uniform("photons", rng)
+        photons_nonnuc = self._domain_uniform("photons", rng)
 
         noisy_n = rng.poisson(blurred_n * photons) / photons
         noisy_nn = rng.poisson(blurred_nonnuc * photons_nonnuc) / photons_nonnuc
