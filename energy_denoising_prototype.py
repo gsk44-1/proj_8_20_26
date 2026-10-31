@@ -104,6 +104,9 @@ class SegmentationEnergyModel(nn.Module):
         for _ in range(steps):
             state = self.update(image, state, differentiable=False).detach()
         return state
+        
+    def forward(self, image, steps=12):
+      return self.infer(image, steps=steps)
 
 
 class RandomEnergyPerturber(nn.Module):
