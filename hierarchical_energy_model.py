@@ -3,8 +3,8 @@
 
 State hierarchy:
     u0 = z
-    u1 = SiLU(K1(u0) + B1(f1(x)))
-    u2 = SiLU(K2(u1) + B2(f2(x)))
+    u1 = SiLU(K1(AvgPool2x2(u0)) + B1(f1(x)))
+    u2 = SiLU(K2(AvgPool2x2(u1)) + B2(f2(x)))
 
 Energy:
     E(x,z) = hierarchical multiscale energy
@@ -235,10 +235,20 @@ class HierarchicalSegmentationEnergy(nn.Module):
 
         f0, f1, f2 = features
 
-        # Hierarchical state features
+        # Hierarchical state features: fixed 2x2 average pooling
+        # before learned stride-1 convolutions. This matches the
+        # image pyramid's ceil_mode behavior even for odd H and W.
+        # Autograd supplies the exact adjoints of both pooling
+        # operators and both learned convolutions.
         u0 = state
-        u1 = F.silu(self.K1(u0) + self.B1(f1))
-        u2 = F.silu(self.K2(u1) + self.B2(f2))
+        u1 = F.silu(
+            self.K1(F.avg_pool2d(u0, 2, ceil_mode=True))
+            + self.B1(f1)
+        )
+        u2 = F.silu(
+            self.K2(F.avg_pool2d(u1, 2, ceil_mode=True))
+            + self.B2(f2)
+        )
 
         # Scalar energy densities at each scale
         densities = (
