@@ -49,6 +49,7 @@ class HierarchicalSegmentationEnergy(nn.Module):
         threshold_scale=3.0,
         scale_weights=(1.0, 0.5, 0.25),
         linear_drive_scale=1.0,
+        smoothness_weight=0.0,
     ):
         super().__init__()
 
@@ -70,6 +71,9 @@ class HierarchicalSegmentationEnergy(nn.Module):
         self.scale_weights = tuple(map(float, scale_weights))
         self.state_l2 = float(state_l2)
         self.linear_drive_scale = float(linear_drive_scale)
+        self.smoothness_weight = float(smoothness_weight)
+        if self.smoothness_weight < 0:
+            raise ValueError("smoothness_weight must be nonnegative")
 
         w = image_width
         c = state_width
@@ -288,7 +292,21 @@ class HierarchicalSegmentationEnergy(nn.Module):
             0.5 * self.state_l2 * state.square().sum()
         )
 
-        return result + linear_energy + l2_energy
+        # Tikhonov (Dirichlet) spatial regularization of centered logits.
+        # Mean-centering removes the per-pixel softmax-invariant direction.
+        # The forward differences are unnormalized pixel differences;
+        # using sums keeps this term on the same extensive scale as
+        # the other energy terms. Autograd computes its exact gradient.
+        smooth_energy = state.new_zeros(())
+        if self.smoothness_weight > 0:
+            centered = state - state.mean(dim=1, keepdim=True)
+            dy = centered[:, :, 1:, :] - centered[:, :, :-1, :]
+            dx = centered[:, :, :, 1:] - centered[:, :, :, :-1]
+            smooth_energy = 0.5 * self.smoothness_weight * (
+                dx.square().sum() + dy.square().sum()
+            )
+
+        return result + linear_energy + l2_energy + smooth_energy
 
     # =========================================================
     # Gradient of scalar energy
