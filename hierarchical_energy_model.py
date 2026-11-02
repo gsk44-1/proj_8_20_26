@@ -87,11 +87,11 @@ class HierarchicalSegmentationEnergy(nn.Module):
         # -----------------------------------------------------
 
         self.K1 = nn.Conv2d(
-            3, c, kernel_size=3, stride=2, padding=1
+            3, c, kernel_size=3, stride=1, padding=1
         )
 
         self.K2 = nn.Conv2d(
-            c, 2 * c, kernel_size=3, stride=2, padding=1
+            c, 2 * c, kernel_size=3, stride=1, padding=1
         )
 
         # Image-dependent biases for the state hierarchy
