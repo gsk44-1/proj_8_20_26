@@ -1,3 +1,4 @@
+
 """Train the image-free three-class probability energy corrector.
 
 Requires probability_hierarchical_energy.py in the same directory, and existing
@@ -7,8 +8,8 @@ Dataset convention inherited from the previous trainer:
   images: [B,Z,2,H,W] (ignored by this energy model)
   labels: [B,Z,3,H,W]: nuclear mask, nonnuclear mask, supervision boost.
 The input to the corrector is synthetic probabilities generated from perturbed
-three-class ground-truth logits. Replace `perturb_logits_stub` later with your
-spectral-band + Gaussian-blur augmentation. No GT or image is passed to the
+three-class ground-truth logits using independent spectral-band noise.
+Ground-truth blurring is optional and disabled by default. No GT or image is passed to the
 energy itself; GT is used only to generate a synthetic starting state and loss.
 
 Training uses a random detached burn-in plus TRACKED_STEPS differentiable
@@ -36,6 +37,8 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
+from scipy import fft
+from scipy.ndimage import gaussian_filter
 
 from probability_hierarchical_energy import ProbabilityHierarchicalEnergy
 
@@ -60,11 +63,18 @@ class TrainConfig:
     tracked_steps: int = 3
     max_burnin_units: int = 7
     unroll_loss_weights: tuple[float, ...] = (0.0, 0.0, 1.0)
-    # Placeholder synthetic logits: NOT the final Fourier-based perturbations.
-    base_logit_magnitude: float = 3.0
-    perturb_rms_min: float = 0.3
-    perturb_rms_max: float = 1.5
+    # Synthetic logit initialization (class k: +magnitude, others: -magnitude).
+    # Fixed span = 2*magnitude, so spectral noise is multiplied by this span.
+    # With magnitude=1.5, clean classes have probabilities ~0.91 / 0.045 / 0.045.
+    base_logit_magnitude: float = 1.5
+    perturb_strength: float = 1.0
     perturb_probability: float = 1.0
+    spectral_bdwidth: float = 0.9
+    spectral_wavelengths: tuple[float, ...] = (250., 150., 100., 50., 25., 12.5, 1.)
+    spectral_amplitudes: tuple[float, ...] = (15., 12., 8., 2., 1., 0.5, 0.3)
+    spectral_amplitude_jitter: tuple[float, float] = (0.6, 1.5)
+    # 0 = no Gaussian blur of the ground truth; >0 smooths class boundaries.
+    gt_blur_sigma: float = 0.0
     # Supervision and task loss
     class_weights: tuple[float, float, float] = (1.0, 2.0, 1.0)
     dice_class_weights: tuple[float, float, float] = (0.2, 0.4, 0.4)
@@ -116,41 +126,88 @@ def targets_from_labels(labels, ignore_index=-100):
     return target, labels[:, 2].float().clamp_min(0)
 
 
+def spectral_noise(shape, bands, bdwidth=0.9, rng=None):
+    """2D spectral-band random field, centered and max-absolute normalized.
+
+    Each amplitude-wavelength pair defines a Gaussian annulus in frequency
+    space; this is a finite number of *bands*, not discrete Fourier modes.
+    Frequencies are in cycles/pixel; wavelengths are measured in pixels.
+    """
+    rng = np.random.default_rng() if rng is None else rng
+    h, w = shape
+    white = rng.standard_normal((h, w))
+    ky = fft.fftfreq(h)[:, None]
+    kx = fft.rfftfreq(w)[None, :]
+    k = np.hypot(kx, ky)
+    filt = np.zeros_like(k)
+    for amplitude, wavelength in bands:
+        filt += amplitude * np.exp(
+            -0.5 * ((k - 1.0 / wavelength) / (bdwidth / wavelength)) ** 2
+        )
+    noise = fft.irfftn(fft.rfftn(white) * filt, s=(h, w)).real
+    noise -= noise.mean()
+    noise /= max(float(np.max(np.abs(noise))), 1e-8)
+    return noise.astype(np.float32)
+
+
+def random_bands(rng, cfg: TrainConfig):
+    """One independently jittered amplitude per predefined wavelength."""
+    wavelengths = np.asarray(cfg.spectral_wavelengths, dtype=np.float64)
+    amplitudes = np.asarray(cfg.spectral_amplitudes, dtype=np.float64)
+    amplitudes = amplitudes * rng.uniform(
+        cfg.spectral_amplitude_jitter[0],
+        cfg.spectral_amplitude_jitter[1],
+        size=len(amplitudes),
+    )
+    return np.column_stack((amplitudes, wavelengths))
+
+
 @torch.no_grad()
 def perturb_logits_stub(target, cfg: TrainConfig, *, generator=None):
-    """TEMPORARY input perturbation hook, output synthetic logits [B,3,H,W].
+    """Construct synthetic [B,3,H,W] logits from ground-truth class IDs.
 
-    This intentionally does NOT implement your finite-band spectral generator.
-    Replace the noise creation below with independently generated spectral
-    fields and optionally blur the GT one-hot maps before creating logits.
+    The historical name is preserved for notebook compatibility; this now
+    implements the spectral perturbation, not the old Gaussian-noise stub.
+    Every image and class gets independent bands and random Fourier phases.
 
-    Class labels use 0/1/2; ignored pixels are temporarily represented as
-    background in the synthetic input, but are masked out of the loss.
+    Baseline logits = -magnitude + 2*magnitude * one_hot.
+    Perturbation = strength * (2*magnitude) * spectral_noise.
+    When gt_blur_sigma > 0, optionally blur each spatial class mask first.
+    Input logits are *never* passed to the energy model; only their softmax is.
+
+    Note: this reference implementation uses SciPy/NumPy on CPU and moves the
+    resulting tensor to the target device. It is suitable as a starting point
+    and can be replaced with a GPU FFT implementation if data loading is slow.
     """
-    valid_target = target.clamp(0, 2)
-    onehot = F.one_hot(valid_target, 3).permute(0, 3, 1, 2).float()
-    logits = cfg.base_logit_magnitude * (2.0 * onehot - 1.0)
+    if target.ndim != 3:
+        raise ValueError("Expected target [B,H,W]")
+    b, h, w = target.shape
+    # An independently sampled seed for each batch, using the main torch RNG
+    # (or a user-provided CPU torch.Generator). Deterministic when seed_all()
+    # is called; stable validation seeds are handled by validate().
+    rng = np.random.default_rng(
+        int(torch.randint(0, 2**31 - 1, (1,), generator=generator).item())
+    )
+    safe = target.clamp(0, 2).detach().cpu().numpy().astype(np.int64)
+    one_hot = np.eye(3, dtype=np.float32)[safe].transpose(0, 3, 1, 2)
+    if cfg.gt_blur_sigma > 0:
+        one_hot = gaussian_filter(
+            one_hot, sigma=(0, 0, cfg.gt_blur_sigma, cfg.gt_blur_sigma),
+            mode="reflect",
+        )
+    span = 2.0 * cfg.base_logit_magnitude
+    logits = -cfg.base_logit_magnitude + span * one_hot
 
-    if cfg.perturb_probability > 0:
-        b, c, h, w = logits.shape
-        # Placeholder: smooth independently sampled Gaussian fields per class.
-        noise = torch.randn(logits.shape, device=logits.device,
-                            dtype=logits.dtype, generator=generator)
-        noise = F.avg_pool2d(F.pad(noise, (4, 4, 4, 4), mode="replicate"), 9, stride=1)
-        # Center each class spatially, then remove the irrelevant common logit mode.
-        noise = noise - noise.mean(dim=(-2, -1), keepdim=True)
-        noise = noise - noise.mean(dim=1, keepdim=True)
-        noise = noise / noise.square().mean(dim=(1, 2, 3), keepdim=True).sqrt().clamp_min(1e-7)
-        strengths = torch.empty((b, 1, 1, 1), device=logits.device,
-                                dtype=logits.dtype).uniform_(
-                                    cfg.perturb_rms_min, cfg.perturb_rms_max,
-                                    generator=generator)
-        if cfg.perturb_probability < 1:
-            enabled = torch.rand((b, 1, 1, 1), device=logits.device,
-                                 generator=generator) < cfg.perturb_probability
-            strengths = strengths * enabled
-        logits = logits + strengths * noise
-    return logits
+    if cfg.perturb_strength > 0 and cfg.perturb_probability > 0:
+        for i in range(b):
+            if rng.random() >= cfg.perturb_probability:
+                continue
+            for cls in range(3):
+                bands = random_bands(rng, cfg)
+                noise = spectral_noise((h, w), bands, cfg.spectral_bdwidth, rng)
+                logits[i, cls] += cfg.perturb_strength * span * noise
+
+    return torch.from_numpy(logits).to(device=target.device, dtype=torch.float32)
 
 
 def make_initial_state(target, cfg, generator=None):
@@ -282,10 +339,9 @@ def _slice_iter(images, labels, cfg, device):
 
 
 def validate(model, loader_val, cfg, device):
-    """Fixed-seed synthetic starts, same across validation calls.
+    """Fixed-seed spectral perturbations, independent of training RNG.
 
-    The validation input is perturbed GT, NOT real initial-model logits.
-    Replace the perturbation hook to evaluate the intended data distribution.
+    Validation uses synthetic perturbed GT, not real first-model logits.
     """
     model.eval()
     depths = sorted(set(cfg.validation_depths))
@@ -294,7 +350,7 @@ def validate(model, loader_val, cfg, device):
     store = {d: {"n": 0, "loss": 0.0, "ce": 0.0,
                  "dice_bg": [], "dice_nuc": [], "dice_nonnuc": [],
                  "energy": 0.0} for d in depths}
-    # Fork RNG states so validation doesn't change the global training RNG.
+    # Fork torch RNG; NumPy fields are seeded from that torch RNG.
     with torch.random.fork_rng(devices=list(range(torch.cuda.device_count())) if device.type == "cuda" else []):
         torch.manual_seed(cfg.seed + 100000)
         if device.type == "cuda":
@@ -360,6 +416,17 @@ def train(loader_train, loader_val, cfg: TrainConfig | None = None,
         raise ValueError("Unroll loss weights should sum to 1")
     if cfg.max_burnin_units < 0:
         raise ValueError("max_burnin_units must be >= 0")
+    if (cfg.base_logit_magnitude <= 0 or cfg.perturb_strength < 0
+            or not 0 <= cfg.perturb_probability <= 1
+            or cfg.gt_blur_sigma < 0 or cfg.spectral_bdwidth <= 0):
+        raise ValueError("Invalid input perturbation settings")
+    if (not cfg.spectral_wavelengths
+            or len(cfg.spectral_wavelengths) != len(cfg.spectral_amplitudes)
+            or any(w <= 0 for w in cfg.spectral_wavelengths)
+            or any(a < 0 for a in cfg.spectral_amplitudes)
+            or not (0 <= cfg.spectral_amplitude_jitter[0]
+                    <= cfg.spectral_amplitude_jitter[1])):
+        raise ValueError("Invalid spectral bands or amplitude jitter")
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     seed_all(cfg.seed)
     out = Path(cfg.output_dir) / cfg.experiment
@@ -393,7 +460,8 @@ def train(loader_train, loader_val, cfg: TrainConfig | None = None,
 
     print(f"Device: {device}; params: {sum(p.numel() for p in model.parameters()):,}")
     print("State: probabilities; image-free energy; triple well OFF")
-    print("Input: synthetic 3-logit GT perturbation STUB -> softmax")
+    print(f"Input: spectral-band 3-logit perturbations -> softmax; "
+          f"strength={cfg.perturb_strength}, GT blur={cfg.gt_blur_sigma}")
     print(f"Tracked steps: {cfg.tracked_steps}; burn-in units: 0..{cfg.max_burnin_units}")
     for epoch in range(epoch_start, cfg.epochs):
         t0 = time.perf_counter()
