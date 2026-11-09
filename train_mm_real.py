@@ -1,3 +1,4 @@
+
 """Train the exact fixed-compatible MM energy on real stained segmentation labels.
 
 Requires mm_fixed_compatible.py beside this file.
@@ -53,6 +54,7 @@ class RealTrainConfig:
     # 'log_prob' adds the spectral noise in log-probability/logit space.
     logit_floor: float = 1e-5
     crop_size: int | None = 128  # None to use whole images
+    crops_per_update: int | None = 8  # None: one crop from every 2D slice
     nuclear_loss_weight: float = 3.0
     nonnuclear_loss_weight: float = 2.0
     background_loss_weight: float = 1.0
@@ -86,6 +88,8 @@ class RealTrainConfig:
             raise ValueError('restart_corruption_probability must be in [0,1]')
         if self.crop_size is not None and self.crop_size < 16:
             raise ValueError('crop_size must be >=16 or None')
+        if self.crops_per_update is not None and self.crops_per_update < 1:
+            raise ValueError('crops_per_update must be positive or None')
         if self.logit_floor <= 0 or self.logit_floor >= 1/3:
             raise ValueError('logit_floor should be in (0, 1/3)')
         if self.eval_every < 1 or self.validation_examples < 1:
@@ -230,6 +234,7 @@ def load_validation_examples(loader: Iterable, cfg: Config, tc: RealTrainConfig)
         if tc.max_val_batches is not None and bidx >= tc.max_val_batches:
             break
         y = labels_from_batch(batch, tc.labels_key).cpu()
+
         for j in range(y.shape[0]):
             yy = spatial_crop(y[j:j+1], tc.crop_size, rng, random_crop=False)
             p0 = corrupt_initial_target(yy, cfg, tc, rng)
@@ -356,9 +361,19 @@ def train_real(train_dataloader: Iterable, val_dataloader: Iterable,
             train_iterator = iter(train_dataloader)
             batch = next(train_iterator)
         y = labels_from_batch(batch, tc.labels_key).cpu()
-        # Independently crop each sample and perturb anew on every use.
-        ys = [spatial_crop(y[j:j+1], tc.crop_size, rng, random_crop=True)
-              for j in range(y.shape[0])]
+        # Select at most crops_per_update source slices before cropping. With
+        # replacement when the loader batch contains fewer slices, allowing
+        # multiple independently sampled crops from the same 2D image.
+        # None preserves the original one-crop-per-slice behavior.
+        if tc.crops_per_update is None:
+            indices = np.arange(y.shape[0])
+        else:
+            indices = rng.choice(
+                y.shape[0], size=tc.crops_per_update,
+                replace=(y.shape[0] < tc.crops_per_update),
+            )
+        ys = [spatial_crop(y[int(j):int(j)+1], tc.crop_size, rng,
+                           random_crop=True) for j in indices]
         y = torch.cat(ys).to(device)
         p = corrupt_initial_target(y, cfg, tc, rng)
         warmup = int(rng.choice(tc.warmup_steps))
