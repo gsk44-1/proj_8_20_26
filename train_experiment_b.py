@@ -39,7 +39,8 @@ class TrainBConfig:
     extra_filter_size: int = 13
     strength_cap: float = 1.5
     extra_strength_cap: float = 0.3
-    initial_extra_strength: float = 0.002
+    initial_extra_strength: float = 0.05
+    extra_orientations: int = 16
     kernel_raw_cap: float = 2.
     anchor_mu: float = 0.4
     step_size: float = 0.02
@@ -148,7 +149,8 @@ def train(tc: TrainBConfig):
     print('Frozen U-Net:',ckpt)
     cfg=Config(**tc.energy)
     model=StructuredEnergy(cfg,tc.n_extra,tc.extra_filter_size,tc.strength_cap,
-      tc.extra_strength_cap,tc.kernel_raw_cap,tc.initial_extra_strength,tc.seed).to(device)
+      tc.extra_strength_cap,tc.kernel_raw_cap,tc.initial_extra_strength,tc.seed,
+      extra_orientations=tc.extra_orientations).to(device)
     params=list(model.parameters())
     optimizer=torch.optim.SGD(params,lr=tc.learning_rate,momentum=tc.momentum,weight_decay=tc.weight_decay)
     print('Trainable parameter count:',sum(p.numel() for p in params))

@@ -1,13 +1,33 @@
-# Experiment B: shared structured energy for nuclear refinement
+# Experiment B — Rotated learned filter bank (Colab)
 
-The frozen pretrained U-Net supplies three-class softmax probabilities. The energy is the **original Modica–Mortola term and fixed separator/boundary filters**, plus 2–4 new learned zero-DC, positive-sum-normalized convolution filters. Each family has a bounded positive strength. Anchor fidelity to the *original* probability map remains fixed, \(\mu=0.4\), with full-three-class L2 fidelity and the original reduced-coordinate metric.
+Changes from the previous Experiment B:
 
-Default strengths: separator 0.5, boundary 0.5 (caps 1.5), new filters 0.002 (caps 0.3). Shared parameters across all PGD steps. Fixed step size 0.02, no backtracking in differentiable training. Default optimizer **SGD** lr=0.001, momentum=0, weight decay=1e-5; these match the requested learning rate and weight decay but may require LR tuning due to tiny higher-order gradients. Four differentiable steps follow detached randomized warmup (0,20,80,160,300). Optional blur and spectral restart corruption is applied to the evolved state. Training input is chosen per update from noisy/blurred ground truth or frozen U-Net probabilities. Both branches anchor their PGD trajectories to the selected initial input.
+1. New extra feature strengths initialize to **0.05** (previously 0.002), with cap 0.3.
+2. Each of 2–4 learned two-channel canonical filters is rotated to **16 orientations across 360 degrees** by default. Rotations use the `_scipy_rotation_matrices` helper in `mm_fixed_compatible.py`, preserving SciPy bilinear `rotate` conventions and differentiability. Each rotated kernel is zero-centered per channel and normalized to positive coefficient sum 1. Orientation responses are max-pooled per feature, then ReLU and squared in the negative reward energy.
+3. Existing separator and boundary shapes, MM energy, shared parameters over time, anchor, and supervised CE + Dice remain unchanged.
+4. Notebook defaults to SGD learning rate **1.0**, momentum 0, as in the previous successful test; adjust as desired.
 
-Training loss reproduces the supplied U-Net objective: class-weighted CE with spatial weights \(1+2m\), CE weights (1,2,1), class-weighted soft Dice weights (0.2,0.4,0.4), Dice multiplier 1.5. Small parameter regularizers are added.
+## Files you need to replace
 
-At evaluation time, 8-connected nuclear components produce instance F1@IoU0.5, merge and split rates; also semantic class Dice. Validation examples are selected from multiple held-out volumes. Best checkpoint is selected by held-out long-horizon instance F1. This validation metric is discrete and **is not differentiated**.
+For an existing Colab Experiment B setup, replace **`learned_energy.py`** and **`train_experiment_b.py`**. Replace the visualization cell (if used) with **`experiment_b_visualization_cell.py`** to load the new orientation config from checkpoints. The rest of your original Experiment B Python files are included unchanged for convenience.
 
-Files: `Experiment_B_Colab.ipynb`, `train_experiment_b.py`, `learned_energy.py`, `experiment_b_loss.py` plus original generator, U-Net, energy modules and shared utilities.
+To run standalone, upload `experiment_b_rotated_bundle.zip` to the notebook; its setup cell extracts to `/content/experiment_b_rotated/`.
 
-**Cautions:** The dataset is generated lazily and cached in CPU RAM (train_volumes * 16 slices). Set train/val seeds to disjoint ranges and avoid any seeds used for U-Net training. `SGD(lr=1e-3)` may make imperceptibly small updates because the new filter strengths and their gradients start small; inspect `grad_norm` and learned strengths and consider larger LR, momentum, or Adam only after checking them. Long warmups and 400-step validation are compute-intensive. This is a starting experiment, not a tuned benchmark. Checkpoint and dataset are not bundled.
+## New / changed configuration
+
+```python
+n_extra=3,
+extra_filter_size=13,
+extra_orientations=16,
+initial_extra_strength=0.05,
+learning_rate=1.0,
+output_dir='/content/drive/MyDrive/Colab Notebooks/proj_26/experiment_b_rotated_results',
+```
+
+## Checkpoints
+
+Use a **fresh output directory**. Older Experiment B state_dict files were built using non-rotated learned features and do not contain the `extra_rotmat` buffer; they cannot be loaded strictly into the new structure. The frozen U-Net checkpoint remains unchanged.
+
+## Practical considerations
+
+The 3×16 filter bank adds 48 oriented convolutions per refinement step, so 400-step evaluation will be slower. The underlying canonical parameter count remains 1019 for 3 filters of size 13, because rotated copies share trainable coefficients. Orientation invariance is approximate (finite angle sampling and discrete-grid interpolation). No end-to-end training was executed on the actual Colab microscopy volumes or checkpoint; a local synthetic gradient and normalization smoke test was run.
