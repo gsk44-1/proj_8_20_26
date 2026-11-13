@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import ndimage as ndi
 from scipy.optimize import linear_sum_assignment
+from scipy.spatial.distance import cdist
 
 STRUCTURE_8 = np.ones((3, 3), dtype=np.uint8)
 
@@ -116,28 +117,90 @@ def instance_score(pred_labels, true_labels, iou_threshold=0.5,
                 split_rate=splits/ntrue if ntrue else np.nan)
 
 
-def evaluate_prediction(prob, target, nonnuclear_image, config=WatershedConfig(),
-                        ignore_index=-100, return_maps=False, iou_threshold=0.5):
-    """Score identically expanded prediction and GT nuclear components.
+def centroid_score(pred_labels, true_labels, distance_threshold=5.):
+    """One-to-one centroid matches within Euclidean threshold, in pixels.
 
-    Prediction seeds are `argmax(prob) == 1`; reference seeds are `target == 1`.
-    Both use the same Euclidean nearest-component expansion and radius. GT
-    `ignore_index` values are not used as barriers or masks during expansion.
+    Maximize the number of eligible matches, then minimize summed distances;
+    centroids are calculated from *unexpanded* connected components. A threshold
+    equal to the distance is accepted. No matching is performed across slices.
+    """
+    if not np.isfinite(distance_threshold) or distance_threshold < 0:
+        raise ValueError('distance_threshold must be finite and nonnegative')
+    pred = np.asarray(pred_labels)
+    truth = np.asarray(true_labels)
+    if pred.ndim != 2 or truth.shape != pred.shape:
+        raise ValueError('Expected matching 2D instance maps')
+    p_ids = np.unique(pred[pred > 0])
+    t_ids = np.unique(truth[truth > 0])
+    npred, ntrue = len(p_ids), len(t_ids)
+    if npred and ntrue:
+        p_centers = np.array(ndi.center_of_mass(np.ones(pred.shape), pred, p_ids), dtype=float)
+        t_centers = np.array(ndi.center_of_mass(np.ones(truth.shape), truth, t_ids), dtype=float)
+        distances = cdist(t_centers, p_centers)
+        allowed = distances <= distance_threshold
+        # Large cardinality bonus prevents a short invalid match displacing a
+        # valid match; unmatched assignments are represented by zero costs.
+        bonus = (min(ntrue, npred) + 1.) * (distance_threshold + 1.)
+        cost = np.where(allowed, distances - bonus, 0.)
+        rr, cc = linear_sum_assignment(cost)
+        matched = [(int(r), int(c)) for r, c in zip(rr, cc) if allowed[r, c]]
+        mean_distance = float(np.mean([distances[r,c] for r,c in matched])) if matched else float('nan')
+    else:
+        matched = []
+        mean_distance = float('nan')
+    tp = len(matched)
+    fp, fn = npred - tp, ntrue - tp
+    return {'centroid_tp': tp, 'centroid_fp': fp, 'centroid_fn': fn,
+            'centroid_f1': 2*tp/(2*tp+fp+fn) if 2*tp+fp+fn else float('nan'),
+            'centroid_mean_matched_distance': mean_distance}
+
+
+def semantic_dice(prob, target, ignore_index=-100):
+    """Hard-label per-class and macro Dice, ignoring unlabelled GT pixels."""
+    prediction = np.asarray(prob).argmax(axis=0)
+    target = np.asarray(target)
+    valid = target != ignore_index
+    scores = {}
+    for cls, name in enumerate(('background', 'nuclear', 'nonnuclear')):
+        a = (prediction == cls) & valid
+        b = (target == cls) & valid
+        den = int(a.sum() + b.sum())
+        scores['dice_' + name] = 2 * int((a & b).sum()) / den if den else float('nan')
+    values = np.array(list(scores.values()), dtype=float)
+    scores['dice_macro'] = float(np.nanmean(values)) if np.isfinite(values).any() else float('nan')
+    return scores
+
+
+def evaluate_prediction(prob, target, nonnuclear_image, config=WatershedConfig(),
+                        ignore_index=-100, return_maps=False, iou_threshold=0.5,
+                        centroid_distance_threshold=5.):
+    """Evaluate unexpanded, symmetrically expanded and centroid instance F1.
+
+    Predicted seeds: argmax(prob)==1; GT seeds: target==1. Ground truth's
+    ignore-index pixels do not block *either* Euclidean expansion, but they
+    ARE excluded from semantic Dice. Raw instance IoU does not ignore them.
     """
     p = np.asarray(prob)
     y = np.asarray(target)
     if p.ndim != 3 or p.shape[0] != 3 or p.shape[1:] != y.shape:
         raise ValueError('prob must be [3,H,W], target [H,W]')
-    initial_seeds = (p.argmax(0) == 1)
-    reference_seeds = (y == 1)
+    initial_seeds = p.argmax(0) == 1
+    reference_seeds = y == 1
+    pred_raw, _ = components(initial_seeds)
+    gt_raw, _ = components(reference_seeds)
+    raw = instance_score(pred_raw, gt_raw, iou_threshold=iou_threshold)
     grown = geodesic_watershed(initial_seeds, nonnuclear_image, config)
     reference = geodesic_watershed(reference_seeds, nonnuclear_image, config)
     stats = instance_score(grown, reference, iou_threshold=iou_threshold)
+    stats.update({'unexpanded_' + key: raw[key] for key in ('tp','fp','fn','instance_f1')})
+    stats.update(centroid_score(pred_raw, gt_raw, centroid_distance_threshold))
+    stats.update(semantic_dice(p, y, ignore_index))
     stats['nuclear_dice_before_growth'] = _binary_dice(initial_seeds, reference_seeds)
     stats['nuclear_dice_after_growth'] = _binary_dice(grown > 0, reference > 0)
     if return_maps:
         return stats, dict(seeds=initial_seeds, grown=grown,
-                           ground_truth_seeds=reference_seeds, ground_truth=reference)
+                           ground_truth_seeds=reference_seeds, ground_truth=reference,
+                           raw_prediction=pred_raw, raw_ground_truth=gt_raw)
     return stats
 
 

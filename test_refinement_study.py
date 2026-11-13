@@ -161,3 +161,50 @@ def test_ground_truth_and_prediction_have_same_radius_cap():
                              (maps['seeds'], maps['grown'])]:
         assert np.all(instances[ndimage.distance_transform_edt(~seeds) > 5] == 0)
         assert instances[seeds].min() > 0
+
+
+def test_centroid_one_to_one_and_distance():
+    from geodesic_instances import centroid_score
+    gt = np.zeros((30,30), np.int32)
+    gt[5,5] = 1; gt[20,20] = 2
+    pred = np.zeros_like(gt)
+    pred[5,6] = 1; pred[5,7] = 2; pred[20,24] = 3
+    result = centroid_score(pred, gt, distance_threshold=2)
+    assert result['centroid_tp'] == 1
+    assert result['centroid_fp'] == 2 and result['centroid_fn'] == 1
+    assert np.isclose(result['centroid_f1'], 2/(2+2+1))
+    assert centroid_score(pred, gt, distance_threshold=4)['centroid_tp'] == 2
+
+
+def test_all_metrics_perfect_match_with_ignore_ring():
+    from geodesic_instances import evaluate_prediction
+    y = np.zeros((33,33), np.int32)
+    y[10:15, 10:15] = 1
+    y[9:16, 9] = -100
+    p = np.zeros((3,33,33), np.float32)
+    p[0] = 1
+    p[0, 10:15, 10:15] = 0
+    p[1, 10:15, 10:15] = 1
+    score = evaluate_prediction(p,y,np.zeros_like(y),WatershedConfig(radius=5),centroid_distance_threshold=2)
+    assert score['instance_f1'] == 1
+    assert score['unexpanded_instance_f1'] == 1
+    assert score['centroid_f1'] == 1
+    assert np.isfinite(score['dice_macro'])
+
+
+def test_final_table_and_three_class_images(tmp_path):
+    from run_refinement_study import write_final_ablation_tables
+    cfg=StudyConfig(n_volumes=3,n_slices_per_volume=1,image_size=32,
+                    z_slices=2, noise_levels=(0.8,), horizons=(0,1),
+                    example_volumes=3, centroid_distance_threshold=5.,
+                    output_dir=str(tmp_path),save_previews=True,device='cpu')
+    samples = build_validation_data(cfg, volume_loader=_fixture)
+    rows, summary, traces = run_study(samples, cfg, selected=ABLATIONS[:2])
+    assert len(rows) == 3*2*2
+    assert all('centroid_f1' in row and 'unexpanded_instance_f1' in row for row in rows)
+    assert all('dice_macro' in row for row in summary)
+    final, file = write_final_ablation_tables(summary,cfg.horizons,tmp_path)
+    assert len(final)==2 and file.exists() and (tmp_path/'final_ablation_table.csv').exists()
+    figs=list(tmp_path.glob('three_class_*png'))
+    assert len(figs)==2
+    assert all(f.stat().st_size>1000 for f in figs)

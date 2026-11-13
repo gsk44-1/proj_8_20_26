@@ -43,3 +43,13 @@ python -m pytest -q test_refinement_study.py
 ## Debugging F1=0 despite visually reasonable masks
 
 The notebook includes a **5b** cell showing F1 as a function of expansion radius, numbers of predicted and true instances, and per-GT best IoUs. A `0.5` matching threshold may yield 0 TP even when overlap is visually apparent. Try `radius=0` to separate segmentation errors from expansion errors. The diagnostic now expands BOTH GT and predictions at every tested radius; `-100` is not used as a mask or growth barrier.
+
+## Additional final-horizon reports and visualizations
+
+- `centroid_distance_threshold` in `StudyConfig` (default **5 px**) controls one-to-one centroid matching of **unexpanded nuclear connected components**. This is independent of `watershed_radius` (default 25 in the Python config, **5 px in the Colab notebook**).
+- The summary CSV now contains `unexpanded_f1`, `centroid_f1`, `dice_macro` (mean across 3 semantic classes per slice, with GT `-100` pixels ignored), and original `micro_instance_f1` (symmetric expansion). For F1, TP/FP/FN are pooled over slices.
+- `final_ablation_table.csv` and `final_ablation_table.html`: one row per ablation and noise level at `max(horizons)`; HTML has separate tables by noise with column-wise best values in bold. `splits` and `merges` are **total counts on expanded instances**, not percentages.
+- `three_class_<ablation>_noise_<level>.png`: one example slice from each of up to `example_volumes=3` independent volumes, with columns for original 3-class GT and all configured refinement horizons. Config `example_noise_level=None` selects the first noise level. For pilot mode to show 3 volumes, set `n_volumes=3`.
+- Three-class figures show **unexpanded semantic argmax predictions**, not expanded instances; `-100` GT pixels appear gray. The GT `-100` mask is *not* applied to seed extraction or Euclidean expansion.
+
+Note: `Dice` in the final table is three-class macro semantic Dice, not nuclear Dice alone. `dice_nuclear`, `dice_background`, and `dice_nonnuclear` are also recorded in `summary.csv`.
