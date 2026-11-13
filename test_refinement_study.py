@@ -86,3 +86,21 @@ def test_template_only_and_mixed_energy(tmp_path):
     assert ta['dirichlet'].item()==0 and ta['triple_well'].item()==0
     assert tb['dirichlet'].item()>0
     assert torch.allclose(ta['templates'],tb['templates'])
+
+
+def test_ignore_ring_does_not_punch_holes():
+    h = w = 31
+    yy, xx = np.mgrid[:h, :w]
+    prob = np.zeros((3, h, w), dtype=np.float32)
+    seed = (yy - 15)**2 + (xx - 15)**2 <= 4
+    prob[1, seed] = 1.0
+    prob[0, ~seed] = 1.0
+    target = np.zeros((h, w), dtype=np.int32)
+    target[(yy - 15)**2 + (xx - 15)**2 <= 25] = 1
+    ring = ((yy - 15)**2 + (xx - 15)**2 <= 36) & ((yy - 15)**2 + (xx - 15)**2 > 25)
+    target[ring] = -100
+    stats, maps = evaluate_prediction(prob, target, np.zeros((h, w), dtype=np.float32),
+                                      WatershedConfig(radius=6), return_maps=True)
+    assert maps['grown'][15, 15] > 0
+    assert np.all(maps['grown'][seed] > 0)
+    assert stats['pred_instances'] == 1

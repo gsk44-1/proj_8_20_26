@@ -1,4 +1,4 @@
-"""Paired corrupted-GT ablation evaluation with watershed instance F1.
+"""Paired corrupted-GT ablation evaluation with Euclidean seeded-expansion instance F1.
 
 Run from notebook, or import build_validation_data and run_study.
 """
@@ -45,7 +45,7 @@ class StudyConfig:
     # Optional saved template model, same weights for all template-bearing ablations.
     template_checkpoint: str = ''
     watershed_radius: float = 25.
-    watershed_cost_weight: float = 4.
+    watershed_cost_weight: float = 0.0
     iou_threshold: float = 0.5
     save_previews: bool = True
 
@@ -192,9 +192,9 @@ def run_study(examples, config: StudyConfig, selected=None):
                     axs[1].imshow(probs.argmax(0)==1,cmap='gray',vmin=0,vmax=1)
                     axs[1].set_title('Predicted seeds')
                     axs[2].imshow(ex['nonnuclear'], cmap='magma')
-                    axs[2].set_title('Nonnuclear cost image')
+                    axs[2].set_title('Nonnuclear channel')
                     axs[3].imshow(maps['grown'], cmap='nipy_spectral',interpolation='nearest')
-                    axs[3].set_title(f'Watershed F1={score["instance_f1"]:.3f}')
+                    axs[3].set_title(f'Expanded instances F1={score["instance_f1"]:.3f}')
                     for ax in axs: ax.axis('off')
                     fig.suptitle(f'{spec.name} | noise={ex["noise"]} | t={step}')
                     safe = ''.join(c if c.isalnum() else '_' for c in spec.name)
@@ -210,7 +210,7 @@ def run_study(examples, config: StudyConfig, selected=None):
 
 
 def plot_study(summary, output_dir=None):
-    """One figure per noise level; pooled watershed F1 vs iteration."""
+    """One figure per noise level; pooled expanded-instance F1 vs iteration."""
     import matplotlib.pyplot as plt
     figures = []
     for noise in sorted({x['noise'] for x in summary}):
@@ -221,7 +221,7 @@ def plot_study(summary, output_dir=None):
             if items:
                 ax.plot([x['iteration'] for x in items],
                         [x['micro_instance_f1'] for x in items], marker='o',label=name)
-        ax.set(xlabel='Refinement iteration', ylabel='Pooled watershed instance F1',
+        ax.set(xlabel='Refinement iteration', ylabel='Pooled expanded-instance F1',
                title=f'Spectral perturbation strength {noise:g}')
         ax.grid(alpha=.25)
         ax.legend(fontsize=8)

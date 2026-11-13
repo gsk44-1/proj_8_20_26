@@ -3,7 +3,7 @@
 ## Contents
 - `Refinement_Ablations_Colab.ipynb`: setup, configuration, plots and saved outputs.
 - `refinement_ablations.py`: asymmetric pairwise well + six ablation variants.
-- `geodesic_instances.py`: radius-limited geodesic multi-seed watershed and instance matching.
+- `geodesic_instances.py`: radius-limited Euclidean seeded expansion and instance matching.
 - `run_refinement_study.py`: reproducible corrupted-GT validation + exported CSVs and PNGs.
 - `test_refinement_study.py`: fast numerical and integration tests, not requiring the full synthetic generator.
 - Original `mm_fixed_compatible.py`, `template_energy.py`, `anchored_refinement.py`, `synthetic_fluor_stains_three_classes_weighted.py`, and other dependency files copied without modification.
@@ -20,8 +20,7 @@ The eight **original** 21x21 painted template PNGs from your earlier project are
 ## Evaluation specification
 - Input is **perturbed ground truth**, generated once per slice per noise strength with the preexisting `synthetic_logits` spectral corruption and a fixed blur sigma; all models see identical probability fields.
 - 2D nuclear seeds = 8-connected components of predicted class-1 argmax, excluding ignored GT-overlap pixels.
-- Original **nonnuclear fluorescence image**, separately normalized at percentiles 1 and 99, sets a positive geodesic traversal cost `1 + alpha * normalized_intensity` (alpha=4 by default).
-- Competitive 8-neighbor Dijkstra propagation uses the *mean* endpoint cost times Euclidean neighbor length. No unlabeled pixel is forcibly filled; expansion can never extend farther than **25 Euclidean pixels from the original connected-component seed**. Per-seed labels stay distinct when they meet.
+- Predicted nuclear connected components are expanded by **plain Euclidean nearest-seed assignment** with a maximum radius of **25 pixels** by default. The supplied nonnuclear image is retained only for backwards compatibility and visualization; it is not used by the current expansion rule. Per-seed labels stay distinct when they meet.
 - Ground truth = 8-connected components of class-1 GT binary mask; no expansion. Ignored overlapping stain labels are excluded from reference and predicted evaluation.
 - Matching is one-to-one maximum-cardinality IoU>=0.5; pooled F1 aggregates TP/FP/FN across slices. Files include PQ, pre-/post-growing Dice, splits and merges, energy components, previews, and F1-vs-step plots.
 - The no-refinement control returns the original predictions unchanged. All other variants use the same fixed step size and L2 anchor. "Templates only" disables **both** MM Dirichlet and well terms (`lam=0`) while retaining the anchor.
