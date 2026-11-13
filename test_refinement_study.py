@@ -104,3 +104,60 @@ def test_ignore_ring_does_not_punch_holes():
     assert maps['grown'][15, 15] > 0
     assert np.all(maps['grown'][seed] > 0)
     assert stats['pred_instances'] == 1
+    assert np.all(maps['ground_truth'][ring] > 0)  # GT -100 cannot cut holes after expansion
+
+
+def test_radius_diagnostic_recovers_match_at_zero_radius():
+    from diagnose_instance_f1 import diagnose_prediction
+    h=w=32
+    yy,xx=np.mgrid[:h,:w]
+    mask=(yy-16)**2+(xx-16)**2<=16
+    target=np.zeros((h,w),dtype=int)
+    target[mask]=1
+    prob=np.zeros((3,h,w),dtype=np.float32)
+    prob[0]=1
+    prob[0,mask]=0
+    prob[1,mask]=1
+    report,details=diagnose_prediction(prob,target,radii=(0,5))
+    assert report[0]['tp']==1 and report[0]['f1']==1.
+    assert report[1]['f1']==1.  # equal seeds expanded by equal radii still match
+    assert details[0]['best_iou']==1.
+    assert details[1]['best_iou']==1.
+    assert details[0]['best_iou']==1.
+
+
+def test_same_expansion_for_prediction_and_ground_truth():
+    h = w = 51
+    yy, xx = np.mgrid[:h, :w]
+    mask = ((yy - 25)**2 + (xx - 25)**2 <= 9)
+    target = np.zeros((h, w), dtype=np.int32)
+    target[mask] = 1
+    # An ignored ring around the reference marker is no growth barrier.
+    ignored_ring = ((yy - 25)**2 + (xx - 25)**2 <= 25) & ~mask
+    target[ignored_ring] = -100
+    prob = np.zeros((3, h, w), dtype=np.float32)
+    prob[0] = 1.0
+    prob[0, mask] = 0.0
+    prob[1, mask] = 1.0
+    config = WatershedConfig(radius=5)
+    stats, maps = evaluate_prediction(prob, target, np.zeros((h, w)),
+                                      config, return_maps=True)
+    assert stats['instance_f1'] == 1.0
+    assert stats['pq'] == 1.0
+    assert np.array_equal(maps['ground_truth'], maps['grown'])
+    assert np.any(maps['ground_truth'][ignored_ring] > 0)
+
+def test_ground_truth_and_prediction_have_same_radius_cap():
+    h = w = 45
+    target = np.zeros((h, w), dtype=np.int32)
+    target[15, 15] = 1
+    prob = np.zeros((3, h, w), dtype=np.float32)
+    prob[0] = 1
+    prob[0, 25, 25] = 0
+    prob[1, 25, 25] = 1
+    stats, maps = evaluate_prediction(prob, target, np.zeros((h,w)),
+                                      WatershedConfig(radius=5), return_maps=True)
+    for seeds, instances in [(maps['ground_truth_seeds'], maps['ground_truth']),
+                             (maps['seeds'], maps['grown'])]:
+        assert np.all(instances[ndimage.distance_transform_edt(~seeds) > 5] == 0)
+        assert instances[seeds].min() > 0

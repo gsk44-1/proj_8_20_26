@@ -19,9 +19,10 @@ The eight **original** 21x21 painted template PNGs from your earlier project are
 
 ## Evaluation specification
 - Input is **perturbed ground truth**, generated once per slice per noise strength with the preexisting `synthetic_logits` spectral corruption and a fixed blur sigma; all models see identical probability fields.
-- 2D nuclear seeds = 8-connected components of predicted class-1 argmax, excluding ignored GT-overlap pixels.
-- Predicted nuclear connected components are expanded by **plain Euclidean nearest-seed assignment** with a maximum radius of **25 pixels** by default. The supplied nonnuclear image is retained only for backwards compatibility and visualization; it is not used by the current expansion rule. Per-seed labels stay distinct when they meet.
-- Ground truth = 8-connected components of class-1 GT binary mask; no expansion. Ignored overlapping stain labels are excluded from reference and predicted evaluation.
+- **Both sides undergo the same instance extraction:** 2D nuclear binary mask -> 8-connected components -> Euclidean nearest-seed expansion with the same radius (e.g. 5 pixels). Predictions use `argmax(prob)==1`; references use `target==1`.
+- The expansion is Euclidean, **not fluorescence-weighted**; each expanded pixel is assigned to its nearest original seed pixel within the radius cap. Separate seed labels remain distinct, even if their expanded regions touch.
+- `-100` pixels do **not** erase or block growth on either side. Original GT `-100` rings may become part of an expanded GT instance if the nearest GT nucleus reaches them. Any regions outside the expansion radius remain background.
+- F1 is measured on the **expanded reference instances**, not the original nuclear boundaries. This is deliberately a different metric from unexpanded-GT instance F1.
 - Matching is one-to-one maximum-cardinality IoU>=0.5; pooled F1 aggregates TP/FP/FN across slices. Files include PQ, pre-/post-growing Dice, splits and merges, energy components, previews, and F1-vs-step plots.
 - The no-refinement control returns the original predictions unchanged. All other variants use the same fixed step size and L2 anchor. "Templates only" disables **both** MM Dirichlet and well terms (`lam=0`) while retaining the anchor.
 
@@ -38,3 +39,7 @@ pip install torch scipy numpy pillow matplotlib scikit-image numba psfmodels pyt
 cd segmentation_refinement_tests
 python -m pytest -q test_refinement_study.py
 ```
+
+## Debugging F1=0 despite visually reasonable masks
+
+The notebook includes a **5b** cell showing F1 as a function of expansion radius, numbers of predicted and true instances, and per-GT best IoUs. A `0.5` matching threshold may yield 0 TP even when overlap is visually apparent. Try `radius=0` to separate segmentation errors from expansion errors. The diagnostic now expands BOTH GT and predictions at every tested radius; `-100` is not used as a mask or growth barrier.

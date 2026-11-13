@@ -1,8 +1,7 @@
 """Radius-limited seeded instance expansion for nuclear seed components.
 
-Ground truth is scored as connected components of the original binary nuclear
-mask. Predictions produce seeds through the 3-class argmax nuclear channel,
-then plain Euclidean nearest-seed expansion with a maximum radius. The older
+Ground truth and predictions are BOTH converted to connected-component nuclear
+seeds, then expanded using the same Euclidean nearest-seed rule and radius. The older
 geodesic-cost fields are kept in the config for backward compatibility but are
 not used by the current Euclidean watershed.
 """
@@ -119,26 +118,26 @@ def instance_score(pred_labels, true_labels, iou_threshold=0.5,
 
 def evaluate_prediction(prob, target, nonnuclear_image, config=WatershedConfig(),
                         ignore_index=-100, return_maps=False, iou_threshold=0.5):
-    """Argmax predicted nuclear seeds -> Euclidean seeded expansion vs GT CCs.
+    """Score identically expanded prediction and GT nuclear components.
 
-    Ignore-index pixels are NOT masked out of the predicted seeds or grown
-    instances. This avoids punching holes in expanded predictions when the GT
-    contains thin -100 rings. Ground truth instances are simply the connected
-    components of `target == 1`.
+    Prediction seeds are `argmax(prob) == 1`; reference seeds are `target == 1`.
+    Both use the same Euclidean nearest-component expansion and radius. GT
+    `ignore_index` values are not used as barriers or masks during expansion.
     """
     p = np.asarray(prob)
     y = np.asarray(target)
     if p.ndim != 3 or p.shape[0] != 3 or p.shape[1:] != y.shape:
         raise ValueError('prob must be [3,H,W], target [H,W]')
     initial_seeds = (p.argmax(0) == 1)
+    reference_seeds = (y == 1)
     grown = geodesic_watershed(initial_seeds, nonnuclear_image, config)
-    reference, _ = components(y == 1)
+    reference = geodesic_watershed(reference_seeds, nonnuclear_image, config)
     stats = instance_score(grown, reference, iou_threshold=iou_threshold)
-    valid = np.ones_like(y, dtype=bool)
-    stats['nuclear_dice_before_growth'] = _binary_dice(initial_seeds, y == 1, valid)
-    stats['nuclear_dice_after_growth'] = _binary_dice(grown > 0, y == 1, valid)
+    stats['nuclear_dice_before_growth'] = _binary_dice(initial_seeds, reference_seeds)
+    stats['nuclear_dice_after_growth'] = _binary_dice(grown > 0, reference > 0)
     if return_maps:
-        return stats, dict(seeds=initial_seeds, grown=grown, ground_truth=reference)
+        return stats, dict(seeds=initial_seeds, grown=grown,
+                           ground_truth_seeds=reference_seeds, ground_truth=reference)
     return stats
 
 
